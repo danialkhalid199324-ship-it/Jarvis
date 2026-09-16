@@ -1,0 +1,38 @@
+appId: com.danialkhalid.jarvis
+productName: Jarvis
+copyright: Copyright © 2026 Danial Khalid
+
+directories:
+  buildResources: resources
+  output: release
+
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+asar: true
+# pdf.js reads its bundled fonts and character maps from disk, so they must not
+# be sealed inside the app archive.
+asarUnpack:
+  - node_modules/pdfjs-dist/standard_fonts/**
+  - node_modules/pdfjs-dist/cmaps/**
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  # Jarvis reads user-selected folders only. These usage strings explain the
+  # macOS prompts the user may see when they authorise a folder.
+  extendInfo:
+    NSDesktopFolderUsageDescription: Jarvis needs access to read documents in folders you explicitly authorise.
+    NSDocumentsFolderUsageDescription: Jarvis needs access to read documents in folders you explicitly authorise.
+    NSDownloadsFolderUsageDescription: Jarvis needs access to read documents in folders you explicitly authorise.
+  # Unsigned local build. Set these once you have an Apple Developer ID.
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+
+dmg:
+  title: Jarvis ${version}
