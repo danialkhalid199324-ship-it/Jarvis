@@ -223,6 +223,18 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
     return true
   })
 
+  /**
+   * "Ask about this": scope the conversation to documents the user picked.
+   * An empty list clears the selection. Ids are validated against the index, so
+   * the selection can only ever name a document Jarvis already holds.
+   */
+  handle<[string[]], string[]>(IPC.selectDocuments, services, (documentIds) => {
+    const valid = (documentIds ?? []).filter((id) => services.store.getDocument(id) !== undefined)
+    services.session.pin(valid)
+    services.logger.info('assistant.documents_selected', { count: valid.length })
+    return valid
+  })
+
   // -- providers -----------------------------------------------------------
 
   handle<[], ProviderDescriptor[]>(IPC.listProviders, services, () => {

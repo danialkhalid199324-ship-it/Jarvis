@@ -64,7 +64,10 @@ const api = {
 
   assistant: {
     ask: (question: string): Promise<AssistantReply> => call(IPC.ask, question),
-    clearConversation: (): Promise<boolean> => call(IPC.clearConversation)
+    clearConversation: (): Promise<boolean> => call(IPC.clearConversation),
+    /** Scope the conversation to chosen documents; pass [] to clear. */
+    selectDocuments: (documentIds: string[]): Promise<string[]> =>
+      call(IPC.selectDocuments, documentIds)
   },
 
   providers: {

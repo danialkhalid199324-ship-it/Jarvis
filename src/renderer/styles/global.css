@@ -236,12 +236,64 @@ select {
 .main {
   overflow-y: auto;
   background: var(--bg-base);
+  /* Grid items default to min-height:auto, which would let content push the
+     column taller than the window and defeat any nested scroll region. */
+  min-height: 0;
 }
 
 .main__inner {
   max-width: 880px;
   margin: 0 auto;
   padding: var(--s-8) var(--s-7) var(--s-8);
+}
+
+/* --------------------------------------------------------------------------
+   Chat layout
+
+   Home is a two-row column: a scrolling conversation and a composer pinned
+   beneath it. The composer is a flex sibling, not an overlay, so it cannot
+   cover the last message no matter how long a reply runs, and the geometry
+   stays correct at any window size without JavaScript.
+   -------------------------------------------------------------------------- */
+
+.main--chat {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.chat__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.chat__inner {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 0 var(--s-7);
+}
+
+.chat__scroll .chat__inner {
+  padding-top: var(--s-8);
+  /* Breathing room so the last message, its citations and file cards never sit
+     flush against the composer. */
+  padding-bottom: var(--s-7);
+}
+
+.chat__composer {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--line);
+  background: var(--bg-base);
+  padding: var(--s-4) 0 var(--s-5);
 }
 
 .page-header {
@@ -464,6 +516,62 @@ select {
   gap: var(--s-4);
 }
 
+.result__badges {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+}
+
+/* The document currently scoped for conversation. */
+.result--selected {
+  border-color: var(--accent-muted);
+  background: var(--bg-raised);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.result__selected {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  border: 1px solid var(--accent-muted);
+  background: var(--accent-dim);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+/* Selection banner above the composer input. */
+.selection {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin-bottom: var(--s-2);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4);
+  border: 1px solid var(--accent-muted);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  min-width: 0;
+}
+
+.selection__label {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.selection__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-primary);
+}
+
 .result__name {
   font-size: 14.5px;
   font-weight: 550;
@@ -576,9 +684,23 @@ select {
   font-variant-numeric: tabular-nums;
 }
 
+.source__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-1) var(--s-3);
+  min-width: 0;
+}
+
+.source__name {
+  font-weight: 500;
+  word-break: break-word;
+}
+
 .source__locator {
   color: var(--text-tertiary);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .disclosure {

@@ -25,6 +25,7 @@ export const IPC = {
   // Assistant
   ask: 'jarvis:ask',
   clearConversation: 'jarvis:clearConversation',
+  selectDocuments: 'jarvis:selectDocuments',
 
   // AI providers
   listProviders: 'jarvis:listProviders',

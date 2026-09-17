@@ -20,6 +20,7 @@ const MAX_FOCUS_DOCUMENTS = 4
 export class Session {
   private turns: ConversationTurn[] = []
   private focusDocumentIds: string[] = []
+  private pinnedDocumentIds: string[] = []
 
   history(): ConversationTurn[] {
     return this.turns
@@ -28,6 +29,22 @@ export class Session {
   /** Document ids the next question should be interpreted against. */
   focus(): string[] {
     return this.focusDocumentIds
+  }
+
+  /**
+   * Documents the user explicitly chose with "Ask about this".
+   *
+   * Distinct from {@link focus}, which Jarvis infers from the last answer. A
+   * pin is a deliberate instruction, so it scopes a question even when the
+   * wording carries no "it" or "those" for the planner to pick up on.
+   */
+  pinnedDocuments(): string[] {
+    return this.pinnedDocumentIds
+  }
+
+  /** Select documents to ask about. Pass an empty array to clear the selection. */
+  pin(documentIds: readonly string[]): void {
+    this.pinnedDocumentIds = documentIds.slice(0, MAX_FOCUS_DOCUMENTS)
   }
 
   hasFocus(): boolean {
@@ -74,6 +91,7 @@ export class Session {
   clear(): void {
     this.turns = []
     this.focusDocumentIds = []
+    this.pinnedDocumentIds = []
   }
 
   private push(turn: ConversationTurn): void {

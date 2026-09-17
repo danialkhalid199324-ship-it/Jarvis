@@ -139,12 +139,16 @@ export class Assistant {
     store: DocumentStore
   ): Promise<SearchHit[]> {
     const { session } = this.deps
-    const focus = session.focus()
+    // An explicitly selected document ("Ask about this") outranks the focus
+    // Jarvis infers from the previous answer.
+    const pinned = session.pinnedDocuments()
+    const focus = pinned.length > 0 ? pinned : session.focus()
 
     // "Summarise it" — the question carries no subject of its own, so it is
-    // about the documents already on screen.
+    // about the documents already on screen. An explicit selection scopes the
+    // question on its own, without needing a pronoun to trigger it.
     const staysInContext =
-      plan.refersToContext && focus.length > 0 && plan.intent !== 'find'
+      (pinned.length > 0 || plan.refersToContext) && focus.length > 0 && plan.intent !== 'find'
 
     if (staysInContext) {
       const restricted = await retrieve(plan, index, store, {
@@ -163,7 +167,10 @@ export class Assistant {
         fallback.push({
           document: meta,
           score: 1,
-          reason: 'Carried over from your previous question.',
+          reason:
+            pinned.length > 0
+              ? 'You selected this document to ask about.'
+              : 'Carried over from your previous question.',
           snippets: []
         })
       }

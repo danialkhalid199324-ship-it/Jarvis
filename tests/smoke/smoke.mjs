@@ -96,7 +96,7 @@ check(
   navLabels.join(', ')
 )
 
-check('greeting uses the configured name', (greeting ?? '').includes('Danial'), greeting)
+check('greeting still says Danial', (greeting ?? '').includes('Danial'), greeting)
 
 await page.screenshot({ path: path.join(OUT, '01-home.png') })
 
@@ -154,6 +154,57 @@ check(
   notices.join(' | ').slice(0, 120)
 )
 await page.screenshot({ path: path.join(OUT, '05-no-provider.png') })
+
+// --- "Ask about this" document selection ---------------------------------
+await page.fill('.command__input', 'Find my GTA operational plan')
+await page.click('button:has-text("Ask Jarvis")')
+await page.waitForSelector('button:has-text("Ask about this")', { timeout: 30000 })
+
+await page.click('.result:has-text("GTA Operational Plan 2026.txt") button:has-text("Ask about this")')
+await page.waitForSelector('.selection')
+check(
+  'selecting a document shows what is selected',
+  ((await page.textContent('.selection__name')) ?? '') === 'GTA Operational Plan 2026.txt',
+  await page.textContent('.selection__name')
+)
+check(
+  'the selected result card is marked',
+  (await page.locator('.result--selected .result__name').first().textContent()) ===
+    'GTA Operational Plan 2026.txt'
+)
+check(
+  'the composer prompts for the selected document',
+  ((await page.getAttribute('.command__input', 'placeholder')) ?? '').includes(
+    'GTA Operational Plan 2026.txt'
+  )
+)
+await page.screenshot({ path: path.join(OUT, '07-document-selected.png') })
+
+await page.click('.selection button:has-text("Clear")')
+check('the selection can be cleared', (await page.locator('.selection').count()) === 0)
+check(
+  'clearing restores the general placeholder',
+  (await page.getAttribute('.command__input', 'placeholder')) === 'Ask Jarvis anything…'
+)
+
+// --- model picker ---------------------------------------------------------
+await page.click('.nav__item:has-text("Settings")')
+await page.waitForSelector('#model')
+const modelOptions = await page.$$eval('#model option', (els) => els.map((e) => e.value))
+check(
+  'Opus 5 and Sonnet 5 are both offered',
+  modelOptions.includes('claude-opus-5') && modelOptions.includes('claude-sonnet-5'),
+  modelOptions.join(', ')
+)
+await page.selectOption('#model', 'claude-sonnet-5')
+await page.waitForTimeout(400)
+check('model selection is saved', (await page.inputValue('#model')) === 'claude-sonnet-5')
+await page.selectOption('#model', 'claude-opus-5')
+await page.waitForTimeout(400)
+check('Opus 5 remains available', (await page.inputValue('#model')) === 'claude-opus-5')
+await page.screenshot({ path: path.join(OUT, '08-model-picker.png') })
+await page.click('.nav__item:has-text("Home")')
+await page.waitForSelector('.chat__composer')
 
 // Coming-later screens are labelled, not faked.
 await page.click('.nav__item:has-text("Businesses")')

@@ -263,6 +263,9 @@ function DataAndPermissions({
 // AI provider
 // ---------------------------------------------------------------------------
 
+/** Sentinel for the "Something else…" option in the model dropdown. */
+const CUSTOM_MODEL = '__custom__'
+
 function AIProvider({
   settings,
   bootstrap,
@@ -274,6 +277,8 @@ function AIProvider({
 }): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderDescriptor[]>([])
   const [apiKey, setApiKey] = useState('')
+  const [forceCustomModel, setForceCustomModel] = useState(false)
+  const setCustomModel = setForceCustomModel
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
 
   const refresh = useCallback(async () => {
@@ -285,6 +290,17 @@ function AIProvider({
   }, [refresh])
 
   const active = providers.find((p) => p.id === settings.ai.activeProviderId)
+  const knownModels = active?.models ?? []
+  const modelIsKnown = knownModels.some((m) => m.id === settings.ai.model)
+  // Drop into free-text automatically when the saved model is not one we list,
+  // so a hand-entered identifier is never silently replaced.
+  const customModel = forceCustomModel || (knownModels.length > 0 && !modelIsKnown)
+
+  const modelHelp = customModel
+    ? 'Enter the exact model identifier your provider expects.'
+    : knownModels.length > 0
+      ? 'Opus 5 is the most capable. Sonnet 5 is a good everyday choice and costs less per question.'
+      : 'Enter the model identifier your provider expects.'
 
   async function save(patch: Partial<JarvisSettings>): Promise<void> {
     setMessage(null)
@@ -316,6 +332,9 @@ function AIProvider({
           value={settings.ai.activeProviderId}
           onChange={(e) => {
             const provider = providers.find((p) => p.id === e.target.value)
+            // A different provider has a different model list, so start from its
+            // dropdown rather than leaving the free-text field open.
+            setForceCustomModel(false)
             void save({
               ai: {
                 ...settings.ai,
@@ -338,23 +357,46 @@ function AIProvider({
         <label className="field__label" htmlFor="model">
           Model
         </label>
-        <input
-          id="model"
-          className="input input--mono"
-          list="model-suggestions"
-          value={settings.ai.model}
-          onChange={(e) => void save({ ai: { ...settings.ai, model: e.target.value } })}
-        />
-        <datalist id="model-suggestions">
-          {(active?.models ?? []).map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.label}
-            </option>
-          ))}
-        </datalist>
-        <p className="field__help">
-          {(active?.models ?? []).map((m) => m.label).join(' · ') || 'Enter the model identifier.'}
-        </p>
+        {/* A real dropdown rather than a datalist: the suggestions on a datalist
+            are only discoverable if you already know to look for them, which
+            made the alternatives effectively invisible. */}
+        {knownModels.length > 0 && !customModel ? (
+          <select
+            id="model"
+            className="select"
+            value={settings.ai.model}
+            onChange={(e) => {
+              if (e.target.value === CUSTOM_MODEL) {
+                setCustomModel(true)
+                return
+              }
+              void save({ ai: { ...settings.ai, model: e.target.value } })
+            }}
+          >
+            {knownModels.map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.label}
+              </option>
+            ))}
+            <option value={CUSTOM_MODEL}>Something else…</option>
+          </select>
+        ) : (
+          <div style={{ display: 'flex', gap: 'var(--s-2)' }}>
+            <input
+              id="model"
+              className="input input--mono"
+              placeholder="Model identifier"
+              value={settings.ai.model}
+              onChange={(e) => void save({ ai: { ...settings.ai, model: e.target.value } })}
+            />
+            {knownModels.length > 0 ? (
+              <button className="btn btn--ghost" onClick={() => setCustomModel(false)}>
+                Back to list
+              </button>
+            ) : null}
+          </div>
+        )}
+        <p className="field__help">{modelHelp}</p>
       </div>
 
       {settings.ai.activeProviderId === 'openai-compatible' ? (

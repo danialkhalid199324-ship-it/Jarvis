@@ -82,10 +82,13 @@ export function App(): React.JSX.Element {
         </div>
       </aside>
 
-      <main className="main">
-        <div className="main__inner">
-          {route === 'home' && settings ? <HomePage settings={settings} /> : null}
+      {/* The Home route owns its own full-height layout so the composer can sit
+          fixed at the bottom while only the conversation scrolls. Every other
+          route keeps the ordinary scrolling page. */}
+      <main className={route === 'home' ? 'main main--chat' : 'main'}>
+        {route === 'home' && settings ? <HomePage settings={settings} /> : null}
 
+        <div className="main__inner" hidden={route === 'home'}>
           {route === 'files' ? <FilesPage settings={settings} /> : null}
 
           {route === 'settings' && bootstrap && settings ? (
