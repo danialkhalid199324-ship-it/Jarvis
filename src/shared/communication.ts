@@ -8,7 +8,7 @@
  * only identity and status.
  */
 
-import type { DocumentMeta, ExternalCallDisclosure } from './types'
+import type { AssistantReply, DocumentMeta, ExternalCallDisclosure } from './types'
 
 // ---------------------------------------------------------------------------
 // Accounts
@@ -313,4 +313,45 @@ export interface DashboardSummary {
   accountsTotal: number
   accountsChecked: number
   failures: AccountFailure[]
+}
+
+// ---------------------------------------------------------------------------
+// Assistant replies
+// ---------------------------------------------------------------------------
+
+/** A cited email, the mail equivalent of `SourceReference`. */
+export interface MailSourceReference {
+  messageId: string
+  accountId: string
+  accountLabel: string
+  subject: string
+  from: string
+  receivedAt: number
+}
+
+/**
+ * What the router returns.
+ *
+ * Extends V0.1's `AssistantReply` rather than replacing it: every field below
+ * is optional, so a reply produced by the existing document assistant is
+ * already a valid `JarvisReply` and nothing about the V0.1 path changes.
+ */
+export interface JarvisReply extends AssistantReply {
+  /** Which capability answered. Absent means the V0.1 document assistant. */
+  capability?: 'documents' | 'mail' | 'calendar' | 'brief'
+  /** Emails the answer was grounded in. */
+  mailSources?: MailSourceReference[]
+  /** Messages to render as cards. */
+  messages?: ScoredMailMessage[]
+  /** Events to render as cards. */
+  events?: CalendarEvent[]
+  /** A prepared draft awaiting the user's review. Never sent. */
+  draft?: EmailDraft
+  /** A prepared action awaiting approval. Nothing has happened yet. */
+  pendingAction?: PendingAction
+  /**
+   * Honest statement of which accounts were reached, when some were not.
+   * Present only when coverage was incomplete.
+   */
+  coverage?: string
 }

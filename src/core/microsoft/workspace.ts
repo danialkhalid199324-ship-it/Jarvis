@@ -140,8 +140,10 @@ export class MicrosoftWorkspace {
   /** Keep account status in step with what actually happened on a read. */
   private hooks() {
     return {
-      onSuccess: (account: ConnectedAccount) => void this.deps.registry.markSynced(account.id),
-      onFailure: (account: ConnectedAccount, failure: { kind: string; reason: string }) => {
+      onSuccess: (account: ConnectedAccount): Promise<void> =>
+        this.deps.registry.markSynced(account.id),
+      onFailure: (account: ConnectedAccount, failure: { kind: string; reason: string }): void => {
+        // Status is in-memory only, so there is nothing to await here.
         this.deps.registry.markProblem(
           account.id,
           failure.kind === 'auth' ? 'needs_reauth' : 'error',

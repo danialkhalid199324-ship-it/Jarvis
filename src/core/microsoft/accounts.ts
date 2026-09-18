@@ -216,8 +216,8 @@ export async function forEachAccount<T>(
   accounts: readonly ConnectedAccount[],
   operation: (account: ConnectedAccount) => Promise<T[]>,
   hooks?: {
-    onSuccess?: (account: ConnectedAccount) => void
-    onFailure?: (account: ConnectedAccount, failure: AccountFailure) => void
+    onSuccess?: (account: ConnectedAccount) => void | Promise<void>
+    onFailure?: (account: ConnectedAccount, failure: AccountFailure) => void | Promise<void>
   }
 ): Promise<MultiAccountResult<T>> {
   const settled = await Promise.allSettled(
@@ -227,20 +227,26 @@ export async function forEachAccount<T>(
   const items: T[] = []
   const checkedAccounts: string[] = []
   const failures: AccountFailure[] = []
+  // Hooks may persist account status. They are awaited rather than fired and
+  // forgotten, so a status write cannot outlive the operation that caused it.
+  const sideEffects: Array<Promise<void>> = []
 
   settled.forEach((outcome, index) => {
     const account = accounts[index]!
     if (outcome.status === 'fulfilled') {
       items.push(...outcome.value.items)
       checkedAccounts.push(account.label)
-      hooks?.onSuccess?.(account)
+      const pending = hooks?.onSuccess?.(account)
+      if (pending) sideEffects.push(pending)
     } else {
       const failure = describeFailure(account, outcome.reason)
       failures.push(failure)
-      hooks?.onFailure?.(account, failure)
+      const pending = hooks?.onFailure?.(account, failure)
+      if (pending) sideEffects.push(pending)
     }
   })
 
+  await Promise.allSettled(sideEffects)
   return { items, checkedAccounts, failures }
 }
 
