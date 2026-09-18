@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { AssistantReply, JarvisSettings, SearchHit } from '../../shared/types'
+import type { JarvisSettings, SearchHit } from '../../shared/types'
+import type { EmailDraft, JarvisReply, PendingAction } from '../../shared/communication'
 import { ResultCard } from '../components/ResultCard'
+import { MessageCard } from '../components/MessageCard'
+import { EventCard } from '../components/EventCard'
+import { ApprovalPanel } from '../components/ApprovalPanel'
+import { DraftPanel } from '../components/DraftPanel'
+import { DashboardCards } from '../components/DashboardCards'
 import { AnswerText } from '../components/AnswerText'
 import { Disclosure } from '../components/Disclosure'
 import { formatClock, formatToday, greetingFor } from '../lib/format'
@@ -9,7 +15,7 @@ import { formatLocators, groupSources } from '../lib/sources'
 interface Turn {
   id: string
   question: string
-  reply: AssistantReply | null
+  reply: JarvisReply | null
   error: string | null
 }
 
@@ -20,12 +26,21 @@ const EXAMPLES = [
   'Summarise it and tell me what still needs attention'
 ]
 
-export function HomePage({ settings }: { settings: JarvisSettings }): React.JSX.Element {
+export function HomePage({
+  settings,
+  onOpenRoute
+}: {
+  settings: JarvisSettings
+  onOpenRoute: (route: 'messages' | 'calendar' | 'files') => void
+}): React.JSX.Element {
   const [question, setQuestion] = useState('')
   const [turns, setTurns] = useState<Turn[]>([])
   const [busy, setBusy] = useState(false)
   /** The document the user picked with "Ask about this", if any. */
   const [selected, setSelected] = useState<{ id: string; fileName: string } | null>(null)
+  /** A prepared action or draft raised by the last answer. Neither has acted. */
+  const [action, setAction] = useState<PendingAction | null>(null)
+  const [draft, setDraft] = useState<EmailDraft | null>(null)
   const [now, setNow] = useState(() => new Date())
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
@@ -52,7 +67,7 @@ export function HomePage({ settings }: { settings: JarvisSettings }): React.JSX.
     const container = scrollRef.current
     if (!container) return
     container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
-  }, [turns, busy, selected])
+  }, [turns, busy, selected, action, draft])
 
   async function ask(text: string): Promise<void> {
     const trimmed = text.trim()
@@ -66,6 +81,11 @@ export function HomePage({ settings }: { settings: JarvisSettings }): React.JSX.
     try {
       const reply = await window.jarvis.assistant.ask(trimmed)
       setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, reply } : t)))
+
+      // A prepared action or draft surfaces beside the composer, where it
+      // cannot be missed. Neither has done anything yet.
+      setAction(reply.pendingAction ?? null)
+      setDraft(reply.draft ?? null)
 
       // A fresh search means the user has moved on to a different document, so
       // the previous selection should not silently keep scoping later questions.
@@ -129,6 +149,8 @@ export function HomePage({ settings }: { settings: JarvisSettings }): React.JSX.
             </p>
           </header>
 
+          <DashboardCards onOpen={onOpenRoute} />
+
           {!hasFolders ? (
             <div className="notice">
               Jarvis has no folders to look in yet. Open Settings → Data &amp; Permissions and
@@ -185,6 +207,17 @@ export function HomePage({ settings }: { settings: JarvisSettings }): React.JSX.
           is, and it stays correct when the window is resized. */}
       <div className="chat__composer">
         <div className="chat__inner">
+          {action ? (
+            <ApprovalPanel
+              action={action}
+              onResolved={(resolved) => {
+                setAction(resolved)
+                if (resolved.status === 'COMPLETED' || resolved.status === 'REJECTED') setDraft(null)
+              }}
+            />
+          ) : draft ? (
+            <DraftPanel draft={draft} onPrepared={setAction} onDiscard={() => setDraft(null)} />
+          ) : null}
           {selected ? (
             <div className="selection">
               <span className="selection__label">Asking about</span>
@@ -245,7 +278,7 @@ function ReplyBody({
   onSelect,
   selectedId
 }: {
-  reply: AssistantReply
+  reply: JarvisReply
   onOpen: (id: string) => void
   onReveal: (id: string) => void
   onSelect: (hit: SearchHit) => void
@@ -298,6 +331,55 @@ function ReplyBody({
       ) : null}
 
       {reply.disclosure ? <Disclosure disclosure={reply.disclosure} /> : null}
+
+      {reply.coverage ? <div className="notice">{reply.coverage}</div> : null}
+
+      {reply.mailSources && reply.mailSources.length > 0 ? (
+        <div className="sources">
+          <div className="section-label" style={{ margin: '0 0 var(--s-3)' }}>
+            Based on {reply.mailSources.length === 1 ? 'this email' : 'these emails'}
+          </div>
+          <div className="sources__list">
+            {reply.mailSources.map((source, i) => (
+              <div className="source" key={`${source.messageId}-${i}`}>
+                <span className="source__num">{i + 1}</span>
+                <span className="source__body">
+                  <span className="source__name">{source.subject}</span>
+                  <span className="source__locator">
+                    {source.from} · {source.accountLabel}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {reply.events && reply.events.length > 0 ? (
+        <>
+          <div className="section-label">
+            {reply.events.length} {reply.events.length === 1 ? 'meeting' : 'meetings'}
+          </div>
+          <div className="results">
+            {reply.events.map((event) => (
+              <EventCard key={`${event.accountId}-${event.id}`} event={event} showDay />
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {reply.messages && reply.messages.length > 0 ? (
+        <>
+          <div className="section-label">
+            {reply.messages.length} {reply.messages.length === 1 ? 'message' : 'messages'}
+          </div>
+          <div className="results">
+            {reply.messages.map((message) => (
+              <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
+            ))}
+          </div>
+        </>
+      ) : null}
 
       {reply.results.length > 0 ? (
         <>

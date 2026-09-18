@@ -1,5 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BootstrapInfo, type DocumentListQuery, type DocumentListResult } from '../shared/ipc'
+import {
+  IPC,
+  type BootstrapInfo,
+  type DocumentListQuery,
+  type DocumentListResult,
+  type MicrosoftStatus
+} from '../shared/ipc'
+import type {
+  CalendarEvent,
+  ConnectedAccount,
+  DailyBrief,
+  DashboardSummary,
+  EmailDraft,
+  JarvisReply,
+  MailMessage,
+  MailQuery,
+  MultiAccountResult,
+  PendingAction
+} from '../shared/communication'
 import type {
   AssistantReply,
   AuthorisedFolder,
@@ -63,7 +81,7 @@ const api = {
   },
 
   assistant: {
-    ask: (question: string): Promise<AssistantReply> => call(IPC.ask, question),
+    ask: (question: string): Promise<JarvisReply> => call(IPC.ask, question),
     clearConversation: (): Promise<boolean> => call(IPC.clearConversation),
     /** Scope the conversation to chosen documents; pass [] to clear. */
     selectDocuments: (documentIds: string[]): Promise<string[]> =>
@@ -80,6 +98,53 @@ const api = {
   diagnostics: {
     activityLog: (limit?: number): Promise<LogEntry[]> => call(IPC.getActivityLog, limit),
     openDataFolder: (): Promise<boolean> => call(IPC.openDataFolder)
+  },
+
+  /**
+   * Microsoft 365. Note what is absent: there is no way to read a token, a
+   * refresh token or an auth code from here. The renderer can ask Jarvis to
+   * connect an account and can see the account's identity and status, and
+   * nothing else.
+   */
+  microsoft: {
+    status: (): Promise<MicrosoftStatus> => call(IPC.msGetStatus),
+    setClientId: (clientId: string): Promise<MicrosoftStatus> => call(IPC.msSetClientId, clientId),
+    connect: (): Promise<ConnectedAccount> => call(IPC.msConnect),
+    disconnect: (accountId: string): Promise<MicrosoftStatus> => call(IPC.msDisconnect, accountId),
+    sync: (accountId: string): Promise<ConnectedAccount | null> => call(IPC.msSyncAccount, accountId),
+    setLabel: (accountId: string, label: string): Promise<ConnectedAccount | null> =>
+      call(IPC.msSetAccountLabel, accountId, label)
+  },
+
+  mail: {
+    list: (query?: MailQuery): Promise<MultiAccountResult<MailMessage>> => call(IPC.mailList, query),
+    get: (accountId: string, messageId: string): Promise<MailMessage | null> =>
+      call(IPC.mailGet, accountId, messageId),
+    /** Produces a draft for review. Never sends. */
+    draftReply: (accountId: string, messageId: string, instruction: string): Promise<JarvisReply> =>
+      call(IPC.mailDraftReply, accountId, messageId, instruction)
+  },
+
+  calendar: {
+    list: (query: { from: number; to: number; accountId?: string }): Promise<MultiAccountResult<CalendarEvent>> =>
+      call(IPC.calendarList, query)
+  },
+
+  /**
+   * Approvals. `approve` is the only call in this whole bridge that can cause
+   * a change outside Jarvis, and it takes nothing but the id of an action the
+   * user has already been shown in full.
+   */
+  approvals: {
+    pending: (): Promise<PendingAction[]> => call(IPC.approvalsPending),
+    prepareSend: (draft: EmailDraft): Promise<PendingAction> => call(IPC.approvalsPrepareSend, draft),
+    approve: (actionId: string): Promise<PendingAction> => call(IPC.approvalsApprove, actionId),
+    reject: (actionId: string): Promise<PendingAction> => call(IPC.approvalsReject, actionId)
+  },
+
+  brief: {
+    today: (): Promise<DailyBrief> => call(IPC.dailyBrief),
+    dashboard: (): Promise<DashboardSummary> => call(IPC.dashboard)
   }
 }
 

@@ -34,8 +34,45 @@ export const IPC = {
 
   // Diagnostics
   getActivityLog: 'jarvis:getActivityLog',
-  openDataFolder: 'jarvis:openDataFolder'
+  openDataFolder: 'jarvis:openDataFolder',
+
+  // Microsoft 365 (V0.2)
+  msGetStatus: 'jarvis:msGetStatus',
+  msSetClientId: 'jarvis:msSetClientId',
+  msConnect: 'jarvis:msConnect',
+  msDisconnect: 'jarvis:msDisconnect',
+  msSyncAccount: 'jarvis:msSyncAccount',
+  msSetAccountLabel: 'jarvis:msSetAccountLabel',
+
+  // Mail
+  mailList: 'jarvis:mailList',
+  mailGet: 'jarvis:mailGet',
+  mailDraftReply: 'jarvis:mailDraftReply',
+
+  // Calendar
+  calendarList: 'jarvis:calendarList',
+
+  // Approvals — the only route to a consequential action
+  approvalsPending: 'jarvis:approvalsPending',
+  approvalsPrepareSend: 'jarvis:approvalsPrepareSend',
+  approvalsApprove: 'jarvis:approvalsApprove',
+  approvalsReject: 'jarvis:approvalsReject',
+
+  // Brief & dashboard
+  dailyBrief: 'jarvis:dailyBrief',
+  dashboard: 'jarvis:dashboard'
 } as const
+
+/** Microsoft connection state, for Settings and the pages that depend on it. */
+export interface MicrosoftStatus {
+  /** True once an Azure application (client) ID has been supplied. */
+  configured: boolean
+  /** The client ID in use. Not a secret; shown so the user can check it. */
+  clientId: string | null
+  accounts: import('./communication').ConnectedAccount[]
+  /** Delegated permissions this build requests, with reasons. */
+  scopes: Array<{ scope: string; neededFor: string; requiresAdminConsent: boolean }>
+}
 
 export interface BootstrapInfo {
   appVersion: string

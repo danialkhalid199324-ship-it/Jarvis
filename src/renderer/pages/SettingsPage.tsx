@@ -8,6 +8,7 @@ import type {
   ProviderDescriptor
 } from '../../shared/types'
 import { formatBytes, formatDateTime } from '../lib/format'
+import { ConnectedAccounts } from '../components/ConnectedAccounts'
 
 interface Props {
   bootstrap: BootstrapInfo
@@ -37,6 +38,7 @@ export function SettingsPage({
         indexStatus={indexStatus}
         onSettingsChanged={onSettingsChanged}
       />
+      <ConnectedAccounts />
       <AIProvider settings={settings} bootstrap={bootstrap} onSettingsChanged={onSettingsChanged} />
       <Personal settings={settings} onSettingsChanged={onSettingsChanged} />
       <Activity bootstrap={bootstrap} />

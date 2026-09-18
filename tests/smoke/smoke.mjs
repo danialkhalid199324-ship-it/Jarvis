@@ -92,7 +92,17 @@ const navLabels = await page.$$eval('.nav__item span:first-child', (els) =>
 check(
   'navigation complete',
   JSON.stringify(navLabels) ===
-    JSON.stringify(['Home', 'Tasks', 'Businesses', 'Files', 'Research', 'Automations', 'Settings']),
+    JSON.stringify([
+      'Home',
+      'Messages',
+      'Calendar',
+      'Files',
+      'Tasks',
+      'Businesses',
+      'Research',
+      'Automations',
+      'Settings'
+    ]),
   navLabels.join(', ')
 )
 
@@ -203,6 +213,72 @@ await page.selectOption('#model', 'claude-opus-5')
 await page.waitForTimeout(400)
 check('Opus 5 remains available', (await page.inputValue('#model')) === 'claude-opus-5')
 await page.screenshot({ path: path.join(OUT, '08-model-picker.png') })
+await page.click('.nav__item:has-text("Home")')
+await page.waitForSelector('.chat__composer')
+
+// --- V0.2: communication surfaces are honest with no account connected ---
+await page.click('.nav__item:has-text("Messages")')
+await page.waitForSelector('.page-header__title:has-text("Messages")')
+const messagesEmpty = (await page.textContent('.empty')) ?? ''
+check(
+  'Messages says what to do rather than showing fake mail',
+  /Connect a Microsoft 365 account/i.test(messagesEmpty),
+  messagesEmpty.slice(0, 80)
+)
+check('Messages shows no fabricated message cards', (await page.locator('.message').count()) === 0)
+
+await page.click('.nav__item:has-text("Calendar")')
+await page.waitForSelector('.page-header__title:has-text("Calendar")')
+const calendarEmpty = (await page.textContent('.empty')) ?? ''
+check(
+  'Calendar says what to do rather than showing fake meetings',
+  /Connect a Microsoft 365 account/i.test(calendarEmpty),
+  calendarEmpty.slice(0, 80)
+)
+check('Calendar shows no fabricated events', (await page.locator('.event').count()) === 0)
+await page.screenshot({ path: path.join(OUT, '09-messages-empty.png') })
+
+// Home cards must show real state, not invented counts.
+await page.click('.nav__item:has-text("Home")')
+await page.waitForSelector('.cards')
+const cardLabels = await page.$$eval('.card__label', (els) => els.map((e) => e.textContent))
+check(
+  'Home shows only Email, Meetings and Files cards',
+  JSON.stringify(cardLabels) === JSON.stringify(['Email', 'Meetings', 'Files']),
+  cardLabels.join(', ')
+)
+const emailCard = await page.locator('.card', { hasText: 'Email' }).first().textContent()
+check(
+  'Email card says connect an account rather than showing a number',
+  /Connect an account/i.test(emailCard ?? ''),
+  (emailCard ?? '').slice(0, 60)
+)
+const filesCard = await page.locator('.card', { hasText: 'Files' }).first().textContent()
+check('Files card shows the real indexed count', /2/.test(filesCard ?? ''), (filesCard ?? '').slice(0, 60))
+await page.screenshot({ path: path.join(OUT, '10-home-dashboard.png') })
+
+// Connected Accounts exists and exposes no credential surface.
+await page.click('.nav__item:has-text("Settings")')
+await page.waitForSelector('.panel__title:has-text("Connected Accounts")')
+check('Connected Accounts section exists', true)
+await page.click('button:has-text("What permissions does this ask for?")')
+await page.waitForSelector('.folder__label')
+const scopeNames = await page.$$eval('.section-label + .folder .folder__label, .folder__label', (els) =>
+  els.map((e) => e.textContent)
+)
+check(
+  'requested permissions are shown and are delegated only',
+  scopeNames.includes('Mail.Read') && scopeNames.includes('Calendars.ReadWrite') &&
+    !scopeNames.some((n) => (n ?? '').endsWith('.All')),
+  scopeNames.filter(Boolean).join(', ')
+)
+const settingsText = (await page.textContent('.main')) ?? ''
+check(
+  'no token or secret appears anywhere in Settings',
+  !/Bearer |refresh_token|client_secret|eyJ[A-Za-z0-9]/.test(settingsText)
+)
+await page.screenshot({ path: path.join(OUT, '11-connected-accounts.png') })
+
 await page.click('.nav__item:has-text("Home")')
 await page.waitForSelector('.chat__composer')
 

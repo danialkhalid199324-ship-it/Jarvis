@@ -214,11 +214,25 @@ export interface AISettings {
 // Settings
 // ---------------------------------------------------------------------------
 
+/**
+ * Microsoft 365 connection settings.
+ *
+ * The client id is the user's own Azure app registration. It is not a secret —
+ * public clients have none — but it is configured rather than hardcoded so each
+ * person's Jarvis signs in as their own registered application.
+ */
+export interface MicrosoftSettings {
+  clientId?: string
+  /** 'common' (default), 'organizations', or a specific tenant id. */
+  authority?: string
+}
+
 export interface JarvisSettings {
   /** Used for the greeting. */
   displayName: string
   folders: AuthorisedFolder[]
   ai: AISettings
+  microsoft: MicrosoftSettings
   /** Maximum characters of document text sent to the AI in one request. */
   maxContextChars: number
   /** Files larger than this (bytes) are skipped during indexing. */

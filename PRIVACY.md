@@ -95,3 +95,74 @@ Future versions will send email, file documents and take actions on your behalf.
 The permission model is built for that now: consequential actions are meant to
 require explicit approval, every action is already logged locally, and the
 authorised-folder boundary is checked at the point of use rather than assumed.
+
+---
+
+# V0.2: Microsoft 365
+
+## 11. Jarvis never acts without you
+
+Reading, searching, analysing, summarising and drafting happen automatically
+once you connect an account. Sending an email and creating, changing or
+cancelling a calendar event **never** do.
+
+Every consequential action becomes a record that has done nothing, shows you
+exactly what it would do, and waits. The code that actually performs an action
+is registered privately inside the approval engine (`approvals.ts`) and is held
+nowhere else — no part of the conversational path has a reference to it. That is
+the structural reason wording cannot get around the gate: a conversation is
+only able to produce a proposal. `ApprovalEngine.approve(id)` is the single
+entry point, it is called only from the IPC handler behind the approval button,
+and it executes the payload stored when the action was proposed — so what runs
+is necessarily what you were shown.
+
+## 12. Your Microsoft credentials
+
+Jarvis signs in with the authorization code flow and PKCE, in your own system
+browser. There is no embedded web view, no username/password path, and no
+client secret — it is registered as a public client, which has none.
+
+Access and refresh tokens live in an MSAL cache encrypted by your macOS
+keychain, stored through the same mechanism as your AI provider key. They are
+never written to a settings file, never logged (MSAL's own logging is capped at
+error level with PII disabled), never passed across the bridge to the Jarvis
+window, and never sent to an AI provider. If the keychain is unavailable, Jarvis
+refuses to save them rather than writing them in the clear.
+
+## 13. Least-privilege permissions
+
+Jarvis requests seven **delegated** scopes and no application permissions, so it
+acts as you and can never reach another person's mailbox or your organisation at
+large. Each one is listed with its reason in Settings → Connected Accounts, and
+in `docs/MICROSOFT-SETUP.md`. None normally requires an administrator; if your
+tenant has disabled user consent, Jarvis says so plainly rather than asking for
+anything broader.
+
+## 14. What is sent when Jarvis reads your mail
+
+The same rule as documents. Listing, searching and triaging mail send nothing —
+all of that is Microsoft Graph filtering plus Jarvis's own scoring, which runs
+on this Mac and costs nothing.
+
+When a question needs a message *read*, Jarvis selects a handful of messages,
+truncates each one, stops at a hard character budget, and sends only those —
+never a mailbox, never a folder, never everything from a sender. The selection
+happens in one place, `mail-context.ts`, and every answer produced this way
+states the provider, the model, how many emails, roughly how many words, and
+which accounts they came from.
+
+## 15. Partial failure is never hidden
+
+When several accounts are connected and one cannot be reached, Jarvis reports
+which ones it actually checked and why the others failed — "I checked 3 of your
+4 connected accounts. Titan needs its Microsoft session renewed." An expired
+session, withdrawn consent, a throttled account and an offline Mac are
+distinguished from one another, because they call for different actions. A
+partial result is never presented as a complete one.
+
+## 16. What the activity log records
+
+Account connections and disconnections, index runs,every external AI call with its
+counts and the accounts involved, and every proposed, approved, rejected and
+completed action. Message bodies, draft text, recipients' content and tokens are
+never logged.

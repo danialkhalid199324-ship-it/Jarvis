@@ -1,5 +1,25 @@
 import { BrowserWindow, dialog, ipcMain, shell, app } from 'electron'
-import { IPC, type BootstrapInfo, type DocumentListQuery, type DocumentListResult } from '../../shared/ipc'
+import {
+  IPC,
+  type BootstrapInfo,
+  type DocumentListQuery,
+  type DocumentListResult,
+  type MicrosoftStatus
+} from '../../shared/ipc'
+import { GRAPH_SCOPES } from '../../core/microsoft/scopes'
+import { draftApprovalPreview } from '../../core/communication/drafts'
+import type {
+  CalendarEvent,
+  ConnectedAccount,
+  DailyBrief,
+  DashboardSummary,
+  EmailDraft,
+  JarvisReply,
+  MailMessage,
+  MailQuery,
+  MultiAccountResult,
+  PendingAction
+} from '../../shared/communication'
 import type { Services } from '../services'
 import { assertReadable } from '../../core/security/paths'
 import type {
@@ -214,12 +234,15 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
 
   // -- assistant -----------------------------------------------------------
 
-  handle<[string], AssistantReply>(IPC.ask, services, (question) =>
-    services.assistant.ask(question)
+  // The composer now goes through the router, which dispatches to documents,
+  // mail, calendar or the brief. Document questions reach the V0.1 assistant
+  // by exactly the path they always did.
+  handle<[string], JarvisReply>(IPC.ask, services, (question) =>
+    services.router.ask(question)
   )
 
   handle<[], boolean>(IPC.clearConversation, services, () => {
-    services.session.clear()
+    services.router.reset()
     return true
   })
 
@@ -264,4 +287,121 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
     await shell.openPath(services.dataDir)
     return true
   })
+
+  // -- Microsoft 365 -------------------------------------------------------
+
+  const microsoftStatus = (): MicrosoftStatus => ({
+    configured: services.msAuth.isConfigured(),
+    clientId: services.settings.get().microsoft.clientId ?? null,
+    accounts: services.workspace.accounts(),
+    scopes: GRAPH_SCOPES
+  })
+
+  handle<[], MicrosoftStatus>(IPC.msGetStatus, services, microsoftStatus)
+
+  handle<[string], MicrosoftStatus>(IPC.msSetClientId, services, async (clientId) => {
+    await services.settings.update({ microsoft: { clientId: clientId.trim() } })
+    services.logger.info('microsoft.client_id_set')
+    return microsoftStatus()
+  })
+
+  /**
+   * Connect an account. Opens the system browser; the window is not involved,
+   * and no credential passes through the renderer at any point.
+   */
+  handle<[], ConnectedAccount>(IPC.msConnect, services, () => services.workspace.connect())
+
+  handle<[string], MicrosoftStatus>(IPC.msDisconnect, services, async (accountId) => {
+    await services.workspace.disconnect(accountId)
+    return microsoftStatus()
+  })
+
+  handle<[string], ConnectedAccount | null>(IPC.msSyncAccount, services, (accountId) =>
+    services.workspace.sync(accountId)
+  )
+
+  handle<[string, string], ConnectedAccount | null>(
+    IPC.msSetAccountLabel,
+    services,
+    (accountId, label) => services.accounts.setLabel(accountId, label)
+  )
+
+  // -- Mail ----------------------------------------------------------------
+
+  handle<[MailQuery | undefined], MultiAccountResult<MailMessage>>(
+    IPC.mailList,
+    services,
+    (query) => services.workspace.listMail(query ?? {})
+  )
+
+  handle<[string, string], MailMessage | null>(IPC.mailGet, services, (accountId, messageId) =>
+    services.workspace.getMessage(accountId, messageId)
+  )
+
+  handle<[string, string, string], JarvisReply>(
+    IPC.mailDraftReply,
+    services,
+    (accountId, messageId, instruction) =>
+      services.mail.draftFor(accountId, messageId, instruction)
+  )
+
+  // -- Calendar ------------------------------------------------------------
+
+  handle<[{ from: number; to: number; accountId?: string }], MultiAccountResult<CalendarEvent>>(
+    IPC.calendarList,
+    services,
+    (query) => services.workspace.listEvents(query)
+  )
+
+  // -- Approvals -----------------------------------------------------------
+
+  handle<[], PendingAction[]>(IPC.approvalsPending, services, () => services.approvals.pending())
+
+  /**
+   * Turn a draft into a SEND_EMAIL action awaiting approval.
+   *
+   * This is as far as a draft can get without the user: the action is
+   * PROPOSED, and nothing is sent until they approve it.
+   */
+  handle<[EmailDraft], PendingAction>(IPC.approvalsPrepareSend, services, (draft) => {
+    const account = services.workspace.accounts().find((a) => a.id === draft.accountId)
+    if (!account) throw new Error('That Microsoft account is no longer connected.')
+    if (draft.to.length === 0) throw new Error('Add at least one recipient before sending.')
+
+    return services.approvals.propose({
+      type: 'SEND_EMAIL',
+      riskLevel: 'high',
+      description: `Send email to ${draft.to.map((r) => r.address).join(', ')}`,
+      source: 'Review & Send',
+      accountId: account.id,
+      accountLabel: account.label,
+      preview: draftApprovalPreview(draft),
+      warning: 'Once sent, an email cannot be recalled from Jarvis.',
+      payload: {
+        accountId: account.id,
+        to: draft.to.map((r) => r.address),
+        cc: draft.cc.map((r) => r.address),
+        subject: draft.subject,
+        body: draft.body,
+        ...(draft.inReplyToMessageId ? { replyToMessageId: draft.inReplyToMessageId } : {})
+      }
+    })
+  })
+
+  /**
+   * The single point at which anything consequential happens.
+   * Reached only by the user pressing Approve in the approval panel.
+   */
+  handle<[string], PendingAction>(IPC.approvalsApprove, services, (actionId) =>
+    services.approvals.approve(actionId)
+  )
+
+  handle<[string], PendingAction>(IPC.approvalsReject, services, (actionId) =>
+    services.approvals.reject(actionId)
+  )
+
+  // -- Brief & dashboard ---------------------------------------------------
+
+  handle<[], DailyBrief>(IPC.dailyBrief, services, () => services.brief.build())
+  handle<[], DashboardSummary>(IPC.dashboard, services, () => services.brief.dashboard())
 }

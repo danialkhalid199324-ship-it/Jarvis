@@ -15,6 +15,7 @@ export function defaultSettings(displayName = 'there'): JarvisSettings {
       activeProviderId: 'anthropic',
       model: 'claude-opus-5'
     },
+    microsoft: {},
     maxContextChars: DEFAULT_MAX_CONTEXT_CHARS,
     maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES
   }
@@ -42,6 +43,7 @@ export class SettingsStore {
       ...base,
       ...loaded,
       ai: { ...base.ai, ...(loaded.ai ?? {}) },
+      microsoft: { ...base.microsoft, ...(loaded.microsoft ?? {}) },
       folders: Array.isArray(loaded.folders) ? loaded.folders : []
     }
     return new SettingsStore(file, settings)
@@ -64,7 +66,8 @@ export class SettingsStore {
     this.settings = {
       ...this.settings,
       ...patch,
-      ai: { ...this.settings.ai, ...(patch.ai ?? {}) }
+      ai: { ...this.settings.ai, ...(patch.ai ?? {}) },
+      microsoft: { ...this.settings.microsoft, ...(patch.microsoft ?? {}) }
     }
     await this.save()
     return this.get()

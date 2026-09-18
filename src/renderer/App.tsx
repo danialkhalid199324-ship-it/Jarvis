@@ -3,6 +3,8 @@ import type { BootstrapInfo } from '../shared/ipc'
 import type { IndexStatus, JarvisSettings } from '../shared/types'
 import { HomePage } from './pages/HomePage'
 import { FilesPage } from './pages/FilesPage'
+import { MessagesPage } from './pages/MessagesPage'
+import { CalendarPage } from './pages/CalendarPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { ComingLater } from './components/ComingLater'
 
@@ -12,7 +14,16 @@ function folderSummary(indexing: boolean, count: number): string {
   return `${count} folder${count === 1 ? '' : 's'} authorised`
 }
 
-type Route = 'home' | 'tasks' | 'businesses' | 'files' | 'research' | 'automations' | 'settings'
+type Route =
+  | 'home'
+  | 'messages'
+  | 'calendar'
+  | 'files'
+  | 'tasks'
+  | 'businesses'
+  | 'research'
+  | 'automations'
+  | 'settings'
 
 interface NavEntry {
   id: Route
@@ -21,11 +32,14 @@ interface NavEntry {
   later?: string
 }
 
+// Working capabilities first, then the ones that are honestly still to come.
 const NAV: NavEntry[] = [
   { id: 'home', label: 'Home' },
+  { id: 'messages', label: 'Messages' },
+  { id: 'calendar', label: 'Calendar' },
+  { id: 'files', label: 'Files' },
   { id: 'tasks', label: 'Tasks', later: 'V0.4' },
   { id: 'businesses', label: 'Businesses', later: 'V0.3' },
-  { id: 'files', label: 'Files' },
   { id: 'research', label: 'Research', later: 'V0.5' },
   { id: 'automations', label: 'Automations', later: 'V0.5' },
   { id: 'settings', label: 'Settings' }
@@ -86,10 +100,16 @@ export function App(): React.JSX.Element {
           fixed at the bottom while only the conversation scrolls. Every other
           route keeps the ordinary scrolling page. */}
       <main className={route === 'home' ? 'main main--chat' : 'main'}>
-        {route === 'home' && settings ? <HomePage settings={settings} /> : null}
+        {route === 'home' && settings ? (
+          <HomePage settings={settings} onOpenRoute={(next) => setRoute(next)} />
+        ) : null}
 
         <div className="main__inner" hidden={route === 'home'}>
           {route === 'files' ? <FilesPage settings={settings} /> : null}
+
+          {route === 'messages' ? <MessagesPage /> : null}
+
+          {route === 'calendar' ? <CalendarPage /> : null}
 
           {route === 'settings' && bootstrap && settings ? (
             <SettingsPage

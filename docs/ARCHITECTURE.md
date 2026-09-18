@@ -15,14 +15,17 @@ backend can reuse the same core instead of reimplementing it.
 ```
 src/
   core/        no Electron imports, fully unit-tested
-    security/    path containment guard, keychain-backed secrets
-    storage/     document store, atomic JSON writes
-    parsers/     pdf · docx · xlsx · csv · txt · md
-    index/       tokeniser, BM25 index, chunker, incremental indexer
-    files/       authorised-folder crawler
-    ai/          provider abstraction + implementations
-    assistant/   query planning, retrieval, grounded answering, session memory
-    logging/     append-only local audit log
+    security/      path containment guard, keychain-backed secrets
+    storage/       document store, atomic JSON writes
+    parsers/       pdf · docx · xlsx · csv · txt · md
+    index/         tokeniser, BM25 index, chunker, incremental indexer
+    files/         authorised-folder crawler
+    ai/            provider abstraction + implementations
+    assistant/     routing, capabilities, session memory
+      capabilities/  mail · calendar (documents is the V0.1 Assistant, untouched)
+    microsoft/     V0.2 — auth, token cache, Graph client, accounts, mail, calendar
+    communication/ V0.2 — attention scoring, excerpts, drafts, approvals, brief
+    logging/       append-only local audit log
   main/        Electron main process: window, IPC, service wiring
   preload/     the only bridge to the UI
   renderer/    React interface
@@ -194,3 +197,107 @@ follow-ups, discloses what it sent, and refuses to invent an answer.
 `tests/smoke/smoke.mjs` launches the real Electron app and drives the real UI
 (see the header of that file). It is not part of `npm test` because it needs
 Playwright, which Jarvis does not otherwise depend on.
+
+
+---
+
+# V0.2 — Communication
+
+## Routing, not one big assistant
+
+`assistant/routing.ts` classifies a question; `assistant/router.ts` dispatches
+it. Neither holds retrieval logic, prompts or Graph calls — those live in the
+capability modules, which are independently testable and know nothing about
+each other.
+
+Classification is **deterministic**. Routing every message through a model would
+be a cost and a latency tax on something that is really a vocabulary check, and
+it would make behaviour hard to pin down. Instead each capability scores from
+its own vocabulary and the clear winner takes the question.
+
+The rule that protects V0.1: **documents is the default and wins ties.** A
+question leaves the document assistant only when it clearly asks about mail or
+calendar. Ten V0.1 questions are pinned as regression tests, and the document
+assistant is called through exactly the entry point it had before — so V0.1
+behaviour is preserved by construction, not reproduced.
+
+One deliberate exception: when a document search finds *nothing* and Microsoft
+is connected, the router also searches mail and says so. This is for questions
+like "What happened with the Bluebird invoice?", which could genuinely mean
+either. It runs only on an empty result, so it can never displace a document
+answer.
+
+## The approval engine
+
+The heart of V0.2's safety, and built to outlive it — V0.5's automation will use
+the same abstraction.
+
+```
+propose()  →  PROPOSED  ──approve()──→  APPROVED → EXECUTING → COMPLETED
+                  │                                          ↘ FAILED
+                  └──reject()──→ REJECTED
+```
+
+Two properties make it hard to subvert:
+
+- **Executors are unreachable from conversation.** They are registered in
+  `main/services.ts` and held privately by the engine. No capability, router or
+  prompt has a reference to one, so a conversation is only *able* to produce a
+  PROPOSED record. No wording — "send it now", "I approve", "skip the
+  confirmation" — reaches an executor, because there is no path.
+- **The payload is captured at propose time.** `approve()` takes an id and
+  nothing else, and runs the payload stored when the action was created. What
+  executes is necessarily what the approval panel displayed.
+
+A test pins the engine's public surface, so a future method that could execute
+without going through `approve()` fails the suite.
+
+## Account isolation and partial failure
+
+Each account carries its own MSAL `homeAccountId`; tokens are fetched per
+account, per request. There is no ambient "current mailbox", so one account's
+data cannot leak into another's results — every message and event is stamped
+with its account at mapping time.
+
+`forEachAccount` queries accounts in parallel and returns successes and failures
+*side by side*. Callers cannot accidentally treat a partial result as complete,
+because the failures come back in the same object. `describeCoverage` turns that
+into the sentence the user sees.
+
+## Cost control
+
+AI is used for summarising, prioritising, drafting and executive synthesis —
+never for retrieval or triage.
+
+| Operation | Model calls |
+|---|---|
+| List, search, filter mail | 0 |
+| Score what needs attention | 0 |
+| Read the calendar, find free slots | 0 |
+| Route a question | 0 |
+| Answer *about* mail | 1, over selected excerpts |
+| Draft a reply | 1 |
+| Daily brief focus | 1, and 0 when the day is empty |
+
+The configured model from Settings is used everywhere; nothing hardcodes Opus,
+and tests assert that a Sonnet 5 selection is honoured across mail and brief.
+
+## Why `fetch` instead of the Graph SDK
+
+Same reasoning as the hand-written BM25 index: this is a handful of REST calls,
+and one fewer dependency is one fewer thing that can fail an install. It also
+makes the entire Graph surface trivial to mock — `tests/graph-mock.ts` is a
+scriptable stand-in that fails loudly on an unexpected request, which is how the
+suite can assert "no send call was made" with confidence.
+
+`@azure/msal-node` is the one new runtime dependency. It is pure JavaScript with
+no native build, so the zero-native-dependency property still holds.
+
+## Extension points after V0.2
+
+| Version | What it plugs into |
+|---|---|
+| V0.3 Businesses | `ConnectedAccount.label` and `AuthorisedFolder.context` already tag both sides. Business scoping is a filter over existing retrieval, not a rewrite. |
+| V0.4 Tasks / reMarkable | Another capability module and another router branch. |
+| V0.5 Automation | The approval engine already models risk, expiry and state. New action types register an executor and appear in the same panel. |
+| V1.0 Voice / mobile | Core still has no UI dependency; a different front end calls the same router. |

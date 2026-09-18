@@ -4,14 +4,44 @@
 
 A private AI executive assistant that runs on your Mac.
 
-This is **V0.1 — Local Intelligence**. It does one thing, and it does it properly:
-it finds and answers questions about the documents in the folders you authorise.
-Email, calendar, reMarkable, browser automation, voice and business agents are
-later phases and are not built yet.
+This is **V0.2 — Communication**. It does two things properly: local document
+intelligence, and Microsoft 365 email and calendar. reMarkable, browser
+automation, voice and business agents are later phases and are not built yet.
 
 ---
 
-## What V0.1 can do
+## The rule that matters most
+
+Jarvis reads, searches, summarises and drafts on its own. It **never** sends an
+email or changes your calendar without you approving that exact action first.
+
+An AI-generated draft is not approval. "Send it" is not approval. Only pressing
+the button in the approval panel is approval — and the panel shows you the
+literal recipients, subject and body, or the before and after of a calendar
+change, before you do.
+
+---
+
+## What V0.2 adds
+
+- **Multiple Microsoft 365 accounts** — GTA, Titan, ICC, personal, whatever you
+  need. Each stays separate, and every result says which account it came from.
+- **Email intelligence** — "What important emails need my attention?" Jarvis
+  ranks on objective signals first (unread, flagged, marked important,
+  addressed to you directly, deadline language) and tells you why it raised
+  each one.
+- **Reply drafting** — with Discard, Save Draft and Review & Send. Review &
+  Send does not send; it opens the approval panel.
+- **Calendar** — read across accounts, find gaps, and prepare changes that wait
+  for your approval.
+- **Daily brief** — today's meetings and the mail that needs attention, with
+  the AI's read of it clearly separated from the facts.
+
+See [docs/MICROSOFT-SETUP.md](docs/MICROSOFT-SETUP.md) to connect an account
+(about five minutes, one-off), and
+[docs/V0.2-ACCEPTANCE.md](docs/V0.2-ACCEPTANCE.md) for the acceptance checklist.
+
+## What V0.1 does (unchanged)
 
 - **Find documents in plain English.** "Find my latest GTA operational plan."
   "What documents do I have relating to Titan Security?"
@@ -97,6 +127,9 @@ answer itself and written to a log on your Mac that you can read in
 | Task | Where |
 |---|---|
 | Ask a question | Home |
+| Triage email | Messages |
+| See your day | Calendar |
+| Connect a Microsoft account | Settings → Connected Accounts |
 | See everything Jarvis has indexed | Files |
 | Add or remove an authorised folder | Settings → Data & Permissions |
 | Re-index after adding new documents | Settings → **Index now** |
@@ -116,17 +149,20 @@ seconds. Use **Rebuild from scratch** only if something looks wrong.
 - [PRIVACY.md](PRIVACY.md) — the data-handling rules the code enforces.
 
 ```bash
-npm test          # 61 tests covering the core, no network or GUI needed
+npm test          # 219 tests, no network and no GUI needed
 npm run typecheck
 npm run dev       # hot-reloading development build
 ```
+
+Microsoft Graph is mocked throughout the test suite. No test can send a real
+email or touch a real calendar.
 
 ## Roadmap
 
 | Version | Scope |
 |---|---|
-| **V0.1** | **Local file intelligence — this release** |
-| V0.2 | Microsoft Outlook mail and calendar |
+| V0.1 | Local file intelligence |
+| **V0.2** | **Microsoft 365 mail and calendar — this release** |
 | V0.3 | Multi-business intelligence (GTA, Titan, Pathlyn, NDIS, personal) |
 | V0.4 | Tasks and reMarkable, carrying unfinished work forward |
 | V0.5 | Browser and application automation, with approval controls |
