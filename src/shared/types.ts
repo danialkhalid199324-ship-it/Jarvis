@@ -155,6 +155,19 @@ export interface ExternalCallDisclosure {
   charsSent: number
   /** File names whose excerpts were included. */
   fileNames: string[]
+  /**
+   * What kind of material the excerpts came from. Absent means documents,
+   * which is what V0.1 always sent.
+   */
+  itemKind?: 'documents' | 'emails' | 'calendar' | 'mixed'
+  /**
+   * Labels for non-document sources — email subjects, meeting titles. Kept
+   * separate from `fileNames` so the document disclosure stays exactly as it
+   * was, and so the UI can word each case correctly.
+   */
+  itemLabels?: string[]
+  /** Which connected accounts the material came from. */
+  accountLabels?: string[]
 }
 
 export interface ConversationTurn {
