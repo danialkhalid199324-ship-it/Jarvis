@@ -170,8 +170,17 @@ export class GraphClient {
       throw classifyResponse(response.status, response.headers.get('retry-after'), body)
     }
 
-    if (response.status === 204) return undefined as T
-    return (await response.json()) as T
+   if (!response.ok) {
+  const body = await response.text().catch(() => '')
+  throw classifyResponse(response.status, response.headers.get('retry-after'), body)
+}
+
+if (response.status === 204) return undefined as T
+
+const responseText = await response.text()
+if (!responseText.trim()) return undefined as T
+
+return JSON.parse(responseText) as T
   }
 
   /**
