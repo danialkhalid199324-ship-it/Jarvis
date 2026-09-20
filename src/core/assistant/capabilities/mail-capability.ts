@@ -3,7 +3,7 @@ import type { ProviderRegistry } from '../../ai/registry'
 import type { Logger } from '../../logging/logger'
 import type { MicrosoftWorkspace } from '../../microsoft/workspace'
 import { describeCoverage } from '../../microsoft/accounts'
-import { needingAttention, scoreMessages } from '../../communication/mail-intelligence'
+import { needingAttention, scoreMessages, sortByNewest } from '../../communication/mail-intelligence'
 import {
   buildMailExcerpts,
   citedMailSources,
@@ -101,7 +101,9 @@ export class MailCapability {
   private async handleList(route: Route): Promise<JarvisReply> {
     const accountId = this.resolveAccountId(route)
     const result = await this.deps.workspace.listMail({ ...(accountId ? { accountId } : {}), limit: 25 })
-    const scored = scoreMessages(result.items, { ownAddresses: this.ownAddresses() })
+    // A plain inbox reads chronologically. Every message keeps its attention
+    // score and reasons — they drive the badges, not the order here.
+    const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
     const attention = scored.filter((m) => m.attention.needsAttention).length
     const unread = scored.filter((m) => !m.isRead).length
 
@@ -122,7 +124,7 @@ export class MailCapability {
       unreadOnly: true,
       limit: 30
     })
-    const scored = scoreMessages(result.items, { ownAddresses: this.ownAddresses() })
+    const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
     return this.reply({
       text:
         scored.length === 0
@@ -165,7 +167,9 @@ export class MailCapability {
       search: terms,
       limit: 25
     })
-    const scored = scoreMessages(result.items, { ownAddresses: this.ownAddresses() })
+    // Graph returns search hits in relevance order; newest first is what a
+    // person scanning results actually wants.
+    const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
 
     const where = accountId
       ? ` in ${result.checkedAccounts[0] ?? 'that account'}`

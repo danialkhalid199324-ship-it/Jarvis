@@ -126,7 +126,31 @@ export function assessAttention(
   }
 }
 
-/** Score a batch and return it sorted with the most pressing first. */
+/**
+ * Order messages newest first, on a copy.
+ *
+ * Separate from scoring on purpose. "What needs my attention?" wants the most
+ * pressing message at the top; a plain inbox, an unread list or a set of search
+ * results want the most recent, because that is what a mail list means to
+ * everyone who has ever used one. Both orderings are useful, so ranking and
+ * chronology are kept as independent steps rather than one baked-in sort.
+ *
+ * The input is never mutated: callers routinely hold the array they pass in.
+ * `Array.prototype.sort` is stable, so messages sharing a timestamp keep the
+ * order they arrived in — which, for an already-scored list, means the more
+ * pressing of the two stays on top.
+ */
+export function sortByNewest<T extends { receivedAt: number }>(messages: readonly T[]): T[] {
+  return [...messages].sort((a, b) => b.receivedAt - a.receivedAt)
+}
+
+/**
+ * Score a batch and return it ranked with the most pressing first.
+ *
+ * This is the attention ordering. For a chronological view, pass the result
+ * through {@link sortByNewest} — the scores and reasons are preserved either
+ * way, so badges and explanations are unaffected by which order is displayed.
+ */
 export function scoreMessages(
   messages: readonly MailMessage[],
   context: AttentionContext

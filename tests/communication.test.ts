@@ -9,7 +9,12 @@ import { AccountRegistry } from '../src/core/microsoft/accounts'
 import { MailCapability } from '../src/core/assistant/capabilities/mail-capability'
 import { CalendarCapability } from '../src/core/assistant/capabilities/calendar-capability'
 import { routeQuestion } from '../src/core/assistant/routing'
-import { assessAttention, needingAttention, scoreMessages } from '../src/core/communication/mail-intelligence'
+import {
+  assessAttention,
+  needingAttention,
+  scoreMessages,
+  sortByNewest
+} from '../src/core/communication/mail-intelligence'
 import { buildMailExcerpts, citedMailSources } from '../src/core/communication/mail-context'
 import { mapMessage } from '../src/core/microsoft/mapping'
 import { parseTimeOfDay, parseDayReference } from '../src/core/communication/time'
@@ -534,5 +539,177 @@ describe('time parsing', () => {
     const now = Date.parse('2026-09-18T02:00:00Z')
     assert.notEqual(parseDayReference('tomorrow', now), parseDayReference('today', now))
     assert.equal(parseDayReference('no day mentioned', now), parseDayReference('today', now))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ordering: chronological views vs the attention ranking
+// ---------------------------------------------------------------------------
+
+describe('message ordering', () => {
+  const at = (iso: string): number => Date.parse(iso)
+
+  /**
+   * A fixture where the two orderings genuinely disagree: the oldest message
+   * is the most pressing, and the newest is the least. Any test that passes
+   * under both orderings proves nothing, so these deliberately conflict.
+   */
+  const conflicting = (): MailMessage[] => [
+    msg({
+      id: 'old-urgent',
+      subject: 'URGENT: please confirm the audit date',
+      importance: 'high',
+      flag: { flagStatus: 'flagged' },
+      receivedDateTime: '2026-09-14T08:00:00Z'
+    }),
+    msg({
+      id: 'mid',
+      subject: 'Roster update',
+      receivedDateTime: '2026-09-16T08:00:00Z'
+    }),
+    msg({
+      id: 'new-quiet',
+      subject: 'FYI only',
+      isRead: true,
+      toRecipients: [{ emailAddress: { address: 'someone@else.example' } }],
+      ccRecipients: [{ emailAddress: { address: 'danial@gta.example' } }],
+      receivedDateTime: '2026-09-18T08:00:00Z'
+    })
+  ]
+
+  test('the fixture really does put the most pressing message oldest', () => {
+    const ranked = scoreMessages(conflicting(), { ownAddresses: OWN })
+    assert.equal(ranked[0]!.id, 'old-urgent', 'attention ranking should lead with the urgent one')
+    assert.ok(
+      ranked[0]!.receivedAt < ranked[ranked.length - 1]!.receivedAt,
+      'and that message must be older than the last, or the test proves nothing'
+    )
+  })
+
+  test('sortByNewest orders newest first', () => {
+    const ordered = sortByNewest(scoreMessages(conflicting(), { ownAddresses: OWN }))
+    assert.deepEqual(ordered.map((m) => m.id), ['new-quiet', 'mid', 'old-urgent'])
+  })
+
+  test('sortByNewest does not mutate the array it is given', () => {
+    const input = scoreMessages(conflicting(), { ownAddresses: OWN })
+    const before = input.map((m) => m.id)
+    sortByNewest(input)
+    assert.deepEqual(input.map((m) => m.id), before, 'the caller\'s array must be untouched')
+  })
+
+  test('sortByNewest preserves every attention assessment', () => {
+    const ranked = scoreMessages(conflicting(), { ownAddresses: OWN })
+    const ordered = sortByNewest(ranked)
+
+    assert.equal(ordered.length, ranked.length)
+    for (const message of ordered) {
+      const original = ranked.find((m) => m.id === message.id)!
+      assert.deepEqual(message.attention, original.attention, `${message.id} lost its assessment`)
+    }
+    // The badges the UI draws from are all still intact.
+    const urgent = ordered.find((m) => m.id === 'old-urgent')!
+    assert.equal(urgent.attention.needsAttention, true)
+    assert.equal(urgent.importance, 'high')
+    assert.ok(urgent.attention.reasons.includes('marked high importance'))
+    assert.ok(urgent.attention.reasons.includes('flagged by you'))
+  })
+
+  test('equal timestamps keep their incoming order, so ties break by priority', () => {
+    const sameTime = '2026-09-17T09:00:00Z'
+    const ranked = scoreMessages(
+      [
+        msg({ id: 'quiet', subject: 'FYI', isRead: true, receivedDateTime: sameTime }),
+        msg({ id: 'urgent', subject: 'URGENT: please confirm', importance: 'high', receivedDateTime: sameTime })
+      ],
+      { ownAddresses: OWN }
+    )
+    assert.deepEqual(sortByNewest(ranked).map((m) => m.id), ranked.map((m) => m.id))
+  })
+
+  test('scoreMessages itself still ranks by attention', () => {
+    // The existing behaviour is unchanged; only the views choose differently.
+    const ranked = scoreMessages(conflicting(), { ownAddresses: OWN })
+    assert.deepEqual(ranked.map((m) => m.id), ['old-urgent', 'mid', 'new-quiet'])
+  })
+})
+
+describe('mail views use the right ordering', () => {
+  /** Graph returns these deliberately out of order. */
+  const inboxPayload = {
+    value: [
+      graphMessage({
+        id: 'old-urgent',
+        subject: 'URGENT: please confirm the audit date',
+        importance: 'high',
+        flag: { flagStatus: 'flagged' },
+        receivedDateTime: '2026-09-14T08:00:00Z'
+      }),
+      graphMessage({ id: 'new-quiet', subject: 'FYI only', isRead: true, receivedDateTime: '2026-09-18T08:00:00Z' }),
+      graphMessage({ id: 'mid', subject: 'Roster update', receivedDateTime: '2026-09-16T08:00:00Z' })
+    ]
+  }
+
+  test('Recent is newest first, not priority first', async (t) => {
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: inboxPayload }])
+    const { mail } = await harness(t, mock)
+    const reply = await mail.handle('Check my emails.', routeQuestion('Check my emails.', ctx))
+
+    assert.deepEqual(reply.messages!.map((m) => m.id), ['new-quiet', 'mid', 'old-urgent'])
+    // The scoring survived the reordering.
+    assert.equal(reply.messages!.find((m) => m.id === 'old-urgent')!.attention.needsAttention, true)
+  })
+
+  test('Unread is newest first', async (t) => {
+    const mock = new GraphMock([
+      {
+        match: '/me/mailFolders/inbox/messages',
+        body: {
+          value: [
+            graphMessage({ id: 'old-urgent', subject: 'URGENT: please confirm', importance: 'high', receivedDateTime: '2026-09-14T08:00:00Z' }),
+            graphMessage({ id: 'newer', subject: 'Roster update', receivedDateTime: '2026-09-17T08:00:00Z' })
+          ]
+        }
+      }
+    ])
+    const { mail } = await harness(t, mock)
+    const reply = await mail.handle('Show my unread emails.', {
+      capability: 'mail',
+      mailIntent: 'unread',
+      reason: 'test'
+    })
+    assert.deepEqual(reply.messages!.map((m) => m.id), ['newer', 'old-urgent'])
+  })
+
+  test('Search results are newest first', async (t) => {
+    const mock = new GraphMock([{ match: '/me/messages', body: inboxPayload }])
+    const { mail } = await harness(t, mock)
+    const reply = await mail.handle('Find the email about the audit.', {
+      capability: 'mail',
+      mailIntent: 'search',
+      searchTerms: 'audit',
+      reason: 'test'
+    })
+    assert.deepEqual(reply.messages!.map((m) => m.id), ['new-quiet', 'mid', 'old-urgent'])
+  })
+
+  test('Needs attention stays ranked by priority, oldest-but-urgent first', async (t) => {
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: inboxPayload }])
+    const { mail } = await harness(t, mock)
+    const q = 'What important emails need my attention?'
+    const reply = await mail.handle(q, routeQuestion(q, ctx))
+
+    assert.equal(reply.messages![0]!.id, 'old-urgent', 'the urgent message must stay on top')
+    // And it is genuinely the oldest, so this is not chronological order.
+    const first = reply.messages![0]!
+    assert.ok(reply.messages!.every((m) => m.receivedAt >= first.receivedAt || m.id === first.id))
+  })
+
+  test('the counts in the Recent summary are unaffected by ordering', async (t) => {
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: inboxPayload }])
+    const { mail } = await harness(t, mock)
+    const reply = await mail.handle('Check my emails.', routeQuestion('Check my emails.', ctx))
+    assert.match(reply.text, /3 recent messages/)
+    assert.match(reply.text, /2 unread/)
   })
 })
