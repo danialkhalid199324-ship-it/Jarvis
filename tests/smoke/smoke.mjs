@@ -225,6 +225,8 @@ check(
 // --- V0.2: communication surfaces are honest with no account connected ---
 await page.click('.nav__item:has-text("Messages")')
 await page.waitForSelector('.page-header__title:has-text("Messages")')
+check('Messages content is visible', await page.locator('.page-header__title:has-text("Messages")').isVisible())
+check('Home content is hidden on Messages', await page.locator('.home-session').isHidden())
 const messagesEmpty = (await page.textContent('.empty')) ?? ''
 check(
   'Messages says what to do rather than showing fake mail',
@@ -235,6 +237,8 @@ check('Messages shows no fabricated message cards', (await page.locator('.messag
 
 await page.click('.nav__item:has-text("Calendar")')
 await page.waitForSelector('.page-header__title:has-text("Calendar")')
+check('Calendar content is visible', await page.locator('.page-header__title:has-text("Calendar")').isVisible())
+check('Home content is hidden on Calendar', await page.locator('.home-session').isHidden())
 const calendarEmpty = (await page.textContent('.empty')) ?? ''
 check(
   'Calendar says what to do rather than showing fake meetings',
@@ -244,9 +248,20 @@ check(
 check('Calendar shows no fabricated events', (await page.locator('.event').count()) === 0)
 await page.screenshot({ path: path.join(OUT, '09-messages-empty.png') })
 
+await page.click('.nav__item:has-text("Files")')
+await page.waitForSelector('.page-header__title:has-text("Files")')
+check('Files content is visible', await page.locator('.page-header__title:has-text("Files")').isVisible())
+check('Home content is hidden on Files', await page.locator('.home-session').isHidden())
+
 // Home cards must show real state, not invented counts.
 await page.click('.nav__item:has-text("Home")')
 await page.waitForSelector('.cards')
+check('Home content is visible again', await page.locator('.home-session').isVisible())
+check(
+  'previous Home conversation is visible again',
+  await page.locator('.conversation').isVisible() &&
+    ((await page.textContent('.conversation')) ?? '').includes('Find my latest GTA operational plan')
+)
 const cardLabels = await page.$$eval('.card__label', (els) => els.map((e) => e.textContent))
 check(
   'Home shows only Email, Meetings and Files cards',

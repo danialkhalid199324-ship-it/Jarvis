@@ -269,6 +269,12 @@ select {
   flex-direction: column;
 }
 
+/* Author-level display rules override the browser's built-in [hidden] rule.
+   Keep Home mounted for its state, but never painted outside the Home route. */
+.home-session[hidden] {
+  display: none;
+}
+
 .supporting-evidence {
   margin-top: var(--s-4);
 }
