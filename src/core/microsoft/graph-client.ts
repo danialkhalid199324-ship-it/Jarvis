@@ -170,17 +170,16 @@ export class GraphClient {
       throw classifyResponse(response.status, response.headers.get('retry-after'), body)
     }
 
-   if (!response.ok) {
-  const body = await response.text().catch(() => '')
-  throw classifyResponse(response.status, response.headers.get('retry-after'), body)
-}
+    if (response.status === 204) return undefined as T
 
-if (response.status === 204) return undefined as T
+    // Read as text first. A successful Graph call does not always carry a
+    // body — /me/sendMail answers 202 Accepted with nothing in it — and
+    // response.json() throws on an empty payload, which would turn a
+    // successful send into a reported failure.
+    const responseText = await response.text()
+    if (!responseText.trim()) return undefined as T
 
-const responseText = await response.text()
-if (!responseText.trim()) return undefined as T
-
-return JSON.parse(responseText) as T
+    return JSON.parse(responseText) as T
   }
 
   /**

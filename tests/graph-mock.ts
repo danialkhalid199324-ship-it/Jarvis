@@ -18,6 +18,11 @@ export interface MockRoute {
   headers?: Record<string, string>
   /** Throw a transport-level failure, simulating an offline machine. */
   networkError?: boolean
+  /**
+   * Reply with no body at all, as Graph does for an accepted send (202) or a
+   * successful mutation. Distinct from `body: {}`, which is the string "{}".
+   */
+  emptyBody?: boolean
 }
 
 export interface RecordedCall {
@@ -76,7 +81,8 @@ export class GraphMock {
       }
 
       const status = route.status ?? 200
-      return new Response(status === 204 ? null : JSON.stringify(route.body ?? {}), {
+      const hasNoBody = status === 204 || route.emptyBody === true
+      return new Response(hasNoBody ? null : JSON.stringify(route.body ?? {}), {
         status,
         headers: { 'content-type': 'application/json', ...(route.headers ?? {}) }
       })

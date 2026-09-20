@@ -56,6 +56,55 @@ describe('Graph error handling', () => {
     assert.equal(classifyResponse(401, null, '').retryable, false)
   })
 
+  test('a successful 202 with an empty body resolves instead of throwing', async () => {
+    // Graph answers /me/sendMail with 202 Accepted and no payload. Parsing
+    // that as JSON would throw, turning a delivered email into a reported
+    // failure — and, worse, into an approval that looks like it failed.
+    const mock = new GraphMock([{ method: 'POST', match: '/me/sendMail', status: 202, emptyBody: true }])
+    const client = new GraphClient(token, mock.fetch)
+
+    const result = await client.request('/me/sendMail', { method: 'POST', body: { message: {} } })
+    assert.equal(result, undefined)
+  })
+
+  test('sending mail against an empty 202 succeeds end to end', async () => {
+    const mock = new GraphMock([{ method: 'POST', match: '/me/sendMail', status: 202, emptyBody: true }])
+    const service = new MailService(new GraphClient(token, mock.fetch), fakeAccount())
+
+    await service.sendMail({ to: ['sarah@client.example'], cc: [], subject: 'Re: Audit', body: 'Sunday works.' })
+    assert.equal(mock.sendCalls().length, 1)
+  })
+
+  test('a 204 with no content still resolves', async () => {
+    const mock = new GraphMock([{ method: 'PATCH', match: '/me/events/', status: 204 }])
+    const client = new GraphClient(token, mock.fetch)
+    assert.equal(await client.request('/me/events/evt-1', { method: 'PATCH', body: {} }), undefined)
+  })
+
+  test('a whitespace-only body is treated as no body', async () => {
+    const mock = new GraphMock([])
+    const client = new GraphClient(token, async () => new Response('   \n  ', { status: 200 }))
+    assert.equal(await client.request('/me/anything'), undefined)
+    assert.equal(mock.calls.length, 0)
+  })
+
+  test('a normal JSON response is still parsed', async () => {
+    const mock = new GraphMock([{ match: '/me/messages', body: { value: [graphMessage()] } }])
+    const page = await new GraphClient(token, mock.fetch).request<{ value: unknown[] }>('/me/messages')
+    assert.equal(page.value.length, 1)
+  })
+
+  test('an empty body on a failed response is still an error, not a success', async () => {
+    // Guards the error path: removing the duplicated ok-check must not let a
+    // failure fall through to the empty-body short-circuit.
+    const mock = new GraphMock([{ method: 'POST', match: '/me/sendMail', status: 403, emptyBody: true }])
+    const client = new GraphClient(token, mock.fetch)
+    await assert.rejects(
+      () => client.request('/me/sendMail', { method: 'POST', body: {} }),
+      (err: unknown) => err instanceof GraphError && err.kind === 'consent'
+    )
+  })
+
   test('the access token is sent as a bearer header and never in the URL', async () => {
     const mock = new GraphMock([{ match: '/me/messages', body: { value: [] } }])
     await new GraphClient(token, mock.fetch).request('/me/messages')
