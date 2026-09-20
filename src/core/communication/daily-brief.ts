@@ -13,16 +13,17 @@ import type {
 
 const BRIEF_SYSTEM = `You are Jarvis, writing the executive summary at the top of a busy operator's daily brief.
 
-You will be given the facts of their day: the meetings in their calendar, and the emails that scored highest on Jarvis's own objective signals. Follow these rules exactly.
+You will be given the facts of their day: the meetings on their connected calendar, and the emails that scored highest on Jarvis's own objective signals. Follow these rules exactly.
 
 1. Use ONLY the facts given. Never invent a meeting, a sender, a deadline, an amount or a degree of urgency.
-2. Open with one or two sentences on the shape of the day — how much is in the calendar and the single thing most worth their attention.
-3. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what they want, and what the user has to do. Include a deadline or an amount only when the email states one; leave the point out entirely otherwise, and never write "not specified" or similar.
-4. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, a clear afternoon. Say nothing if there is nothing to say.
-5. Close with one line naming what to do first.
-6. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
-7. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
-8. No greeting, no sign-off, no headings, no restating of these instructions.`
+2. Report what you can see, never a state of the world you cannot. You can see the user's connected calendar and mail, and nothing else. No meetings showing means none are on the connected calendar — it does not mean the day is free, clear or open, and you must not say that it is. In the same way, never assert that money is still owed, that a bill is unpaid, that a task was not done or that a deadline was missed: an email is evidence of what was sent, not of what is true now. For anything financial, say to confirm its payment status against the user's own records and arrange payment only if it turns out to still be outstanding.
+3. Open with one or two sentences on the shape of the day — what is on the calendar and the single thing most worth their attention.
+4. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what they want, and what the user has to do. Include a deadline or an amount only when the email states one; leave the point out entirely otherwise, and never write "not specified" or similar.
+5. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, an afternoon with nothing booked. Say nothing if there is nothing to say.
+6. Close with one line naming what to do first.
+7. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
+8. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
+9. No greeting, no sign-off, no headings, no restating of these instructions.`
 
 export interface BriefDeps {
   workspace: MicrosoftWorkspace
@@ -126,8 +127,8 @@ export class DailyBriefService {
         accounts.length === 0
           ? 'Connect a Microsoft account in Settings and I can brief you on your mail and calendar.'
           : unreadCount === 0
-            ? 'Your calendar is clear today and there is nothing in your recent mail that needs attention.'
-            : `No meetings today, and nothing in your ${unreadCount} unread ${
+            ? 'No meetings are showing on your connected calendar today, and nothing in your recent mail looks like it needs attention.'
+            : `No meetings are showing on your connected calendar today, and nothing in your ${unreadCount} unread ${
                 unreadCount === 1 ? 'message' : 'messages'
               } looks like it needs attention.`
       return brief
@@ -141,14 +142,14 @@ export class DailyBriefService {
     const factSheet = [
       `Today is ${new Date(now).toDateString()}.`,
       meetingsToday.length === 0
-        ? 'No meetings scheduled today.'
+        ? 'No meetings are showing on the connected calendar today. This does not establish that the day is free.'
         : `Meetings today (${meetingsToday.length}):\n` +
           meetingsToday
             .map((e) => `- ${formatTime(e.start)}–${formatTime(e.end)} ${e.subject} (${e.accountLabel})`)
             .join('\n'),
       nextMeeting
         ? `Next meeting: ${formatTime(nextMeeting.start)} ${nextMeeting.subject}.`
-        : 'No meetings remaining today.',
+        : 'No further meetings are showing on the connected calendar today.',
       `Unread email: ${unreadCount}. Scored as needing attention: ${needsAttentionCount}.`,
       bundle.excerpts.length > 0
         ? `Highest-scoring messages:\n${bundle.excerpts.map((e) => e.text).join('\n\n---\n\n')}`

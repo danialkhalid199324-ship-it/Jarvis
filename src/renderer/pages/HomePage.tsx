@@ -288,7 +288,7 @@ const RETRIEVAL_CARD_LIMIT = 12
  * paragraph written about it, so this only guards against a future caller
  * attaching more than it explained.
  */
-const SUPPORTING_CARD_LIMIT = 10
+const SUPPORTING_CARD_LIMIT = 15
 
 function MessageSection({
   messages,

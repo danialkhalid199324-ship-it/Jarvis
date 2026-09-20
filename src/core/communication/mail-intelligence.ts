@@ -29,6 +29,25 @@ import type {
  * brand-new client is treated exactly like an established one.
  */
 
+/**
+ * The kind of business matter a message is about.
+ *
+ * Deliberately broad. This is not a taxonomy of the user's work — it exists so
+ * that an executive shortlist can spread across genuinely different kinds of
+ * problem instead of being filled by five variations of the same one. It is
+ * derived from the significance patterns below, so it cannot drift away from
+ * the reasons the user is actually shown.
+ */
+export type MatterCategory =
+  | 'financial'
+  | 'compliance'
+  | 'deadline'
+  | 'decision'
+  | 'request'
+  | 'operational'
+  | 'agreement'
+  | 'other'
+
 /** A message at or above this score is surfaced as needing attention. */
 export const ATTENTION_THRESHOLD = 3
 
@@ -39,45 +58,88 @@ const BULK_THRESHOLD = 2
 const SIGNIFICANCE_OVERRIDE = 4
 
 /** Signals that a message is genuinely someone's business problem. */
-const SIGNIFICANCE_PATTERNS: Array<{ pattern: RegExp; points: number; reason: string }> = [
-  { pattern: /\b(overdue|past due|final notice|arrears|unpaid)\b/i, points: 5, reason: 'overdue' },
+const SIGNIFICANCE_PATTERNS: Array<{
+  pattern: RegExp
+  points: number
+  reason: string
+  category: MatterCategory
+}> = [
+  {
+    pattern: /\b(overdue|past due|final notice|arrears|unpaid)\b/i,
+    points: 5,
+    reason: 'overdue',
+    category: 'financial'
+  },
   {
     pattern: /\b(invoice|remittance|payment|amount due|outstanding balance|statement of account)\b/i,
     points: 4,
-    reason: 'concerns payment'
+    reason: 'concerns payment',
+    category: 'financial'
   },
   {
     pattern: /\b(audit|compliance|regulator\w*|breach|incident|non[- ]?conformance|corrective action|show cause)\b/i,
     points: 4,
-    reason: 'concerns compliance'
+    reason: 'concerns compliance',
+    category: 'compliance'
   },
   {
     pattern: /\b(deadline|due (?:today|tomorrow|by|on)|expires?|closing date|cut[- ]?off|close of business|\bcob\b)/i,
     points: 4,
-    reason: 'has a deadline'
+    reason: 'has a deadline',
+    category: 'deadline'
   },
   {
     pattern: /\b(please (?:approve|sign|authorise|authorize)|approval required|sign[- ]?off|your decision|awaiting your)\b/i,
     points: 4,
-    reason: 'waiting on your decision'
+    reason: 'waiting on your decision',
+    category: 'decision'
   },
-  { pattern: /\b(urgent|asap|immediately|critical|escalat\w+)\b/i, points: 4, reason: 'says it is urgent' },
+  {
+    pattern: /\b(urgent|asap|immediately|critical|escalat\w+)\b/i,
+    points: 4,
+    reason: 'says it is urgent',
+    // Urgency is a volume control, not a kind of problem: an urgent invoice is
+    // still a financial matter. It deliberately carries no category of its own.
+    category: 'other'
+  },
   {
     pattern: /\b(complaint|dispute|cancellation|termination|outage|failure)\b/i,
     points: 3,
-    reason: 'operational or relationship issue'
+    reason: 'operational or relationship issue',
+    category: 'operational'
   },
   {
     pattern: /\b(please (?:advise|review|respond|reply|provide|send|confirm)|could you please|can you please|i need|we need)\b/i,
     points: 3,
-    reason: 'someone is asking you for something'
+    reason: 'someone is asking you for something',
+    category: 'request'
   },
   {
     pattern: /\b(contract|agreement|proposal|quote|tender|submission|renewal)\b/i,
     points: 2,
-    reason: 'concerns an agreement'
+    reason: 'concerns an agreement',
+    category: 'agreement'
   }
 ]
+
+/**
+ * Which kinds of business matter a set of scoring reasons points at.
+ *
+ * Reads straight off the pattern table above rather than re-matching text, so
+ * the categories and the reasons the user is shown are the same judgement. A
+ * reason that carries no category — "unread", "flagged by you" — contributes
+ * nothing here, which is correct: those say how the message arrived, not what
+ * it is about.
+ */
+export function categoriseReasons(reasons: readonly string[]): MatterCategory[] {
+  const found: MatterCategory[] = []
+  for (const { reason, category } of SIGNIFICANCE_PATTERNS) {
+    if (category !== 'other' && reasons.includes(reason) && !found.includes(category)) {
+      found.push(category)
+    }
+  }
+  return found
+}
 
 /** Weak human-engagement signals. Useful for ordering, never for priority. */
 const ENGAGEMENT_PATTERNS: Array<{ pattern: RegExp; points: number; reason: string }> = [

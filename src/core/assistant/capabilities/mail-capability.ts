@@ -21,8 +21,10 @@ import {
   ANALYSIS_CONTEXT_CHARS,
   MAIL_ANALYSIS_SYSTEM,
   analysisInstruction,
+  knowledgeCaveat,
   selectForAnalysis,
-  type AnalysisSelection
+  type AnalysisSelection,
+  type MailMatter
 } from './mail-analysis'
 import type {
   JarvisReply,
@@ -325,7 +327,9 @@ export class MailCapability {
     if (!provider) {
       return this.reply({
         text:
-          `I have picked out the ${selection.candidates.length} that matter most, but reading them and telling you ` +
+          `I have picked out the ${selection.matters.length} ${
+            selection.matters.length === 1 ? 'matter' : 'matters'
+          } that need you most, but reading them and telling you ` +
           'what each one wants needs an AI provider. Add a key in Settings → AI Provider.',
         messages: selection.candidates,
         result,
@@ -350,9 +354,21 @@ export class MailCapability {
     }
 
     // The cards shown are exactly the messages the model saw — if the budget
-    // cut one, it is not presented as analysed.
-    const analysedIds = new Set(bundle.excerpts.map((e) => e.messageId))
-    const analysed = selection.candidates.filter((m) => analysedIds.has(m.id))
+    // cut one, it is not presented as analysed. A matter whose every message
+    // was cut is dropped from the grouping too, so the instruction can never
+    // point at an excerpt number that is not there.
+    const numberByMessage = new Map(bundle.excerpts.map((e) => [e.messageId, e.number]))
+    const groups: number[][] = []
+    const analysedMatters: MailMatter[] = []
+    for (const matter of selection.matters) {
+      const numbers = matter.messages
+        .map((m) => numberByMessage.get(m.id))
+        .filter((n): n is number => n !== undefined)
+      if (numbers.length === 0) continue
+      groups.push(numbers)
+      analysedMatters.push(matter)
+    }
+    const analysed = selection.candidates.filter((m) => numberByMessage.has(m.id))
 
     const model = this.deps.providers.activeModelId
     const disclosure = mailDisclosure(
@@ -380,7 +396,7 @@ export class MailCapability {
           messages: [
             {
               role: 'user',
-              content: `${analysisInstruction(question, bundle.excerpts.length)}\n\n${renderMailExcerpts(
+              content: `${analysisInstruction(question, groups)}\n\n${renderMailExcerpts(
                 bundle.excerpts
               )}`
             }
@@ -413,8 +429,14 @@ export class MailCapability {
       })
     }
 
+    // Jarvis's own statement of what it cannot see. Deterministic, so it does
+    // not depend on the model having obeyed the same rule in its prose.
+    const caveat = knowledgeCaveat(analysedMatters)
+
     return this.reply({
-      text: `${analysisLead(selection, analysed.length)}\n\n${text}`,
+      text: [analysisLead(selection, analysedMatters, analysed.length), text, caveat]
+        .filter(Boolean)
+        .join('\n\n'),
       messages: analysed,
       result,
       kind: 'answer',
@@ -714,19 +736,28 @@ export class MailCapability {
 /**
  * The one factual line above an analysis.
  *
- * States what was analysed and what was left out, so a shortlist is never
- * mistaken for the whole picture.
+ * Counts matters, not messages, because that is what was asked for and what the
+ * blocks below it correspond to. When grouping actually collapsed something,
+ * the message count is stated too — otherwise "5 matters" under six cards looks
+ * like an error rather than the point.
  */
-function analysisLead(selection: AnalysisSelection, analysed: number): string {
-  const subject = analysed === 1 ? 'message' : 'messages'
+function analysisLead(
+  selection: AnalysisSelection,
+  matters: readonly MailMatter[],
+  messages: number
+): string {
+  const count = matters.length
+  const noun = count === 1 ? 'matter' : 'matters'
+  const from = messages > count ? `, across ${messages} messages` : ''
+
   if (selection.attentionOnly) {
-    return selection.poolSize > analysed
-      ? `The ${analysed} most pressing of ${selection.poolSize} messages that need your attention.`
-      : `${analysed} ${subject} ${analysed === 1 ? 'needs' : 'need'} your attention.`
+    return selection.poolSize > count
+      ? `The ${count} most pressing of ${selection.poolSize} matters needing your attention${from}.`
+      : `${count} ${noun} ${count === 1 ? 'needs' : 'need'} your attention${from}.`
   }
-  return selection.poolSize > analysed
-    ? `The ${analysed} most pressing of ${selection.poolSize} recent messages.`
-    : `${analysed} recent ${subject}.`
+  return selection.poolSize > count
+    ? `The ${count} most pressing of ${selection.poolSize} recent matters${from}.`
+    : `${count} recent ${noun}${from}.`
 }
 
 function notice(text: string): JarvisReply {

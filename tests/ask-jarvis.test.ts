@@ -23,8 +23,12 @@ import {
 } from '../src/core/assistant/routing'
 import {
   DEFAULT_ANALYSIS_COUNT,
+  MAIL_ANALYSIS_SYSTEM,
   MAX_ANALYSIS_COUNT,
   analysisLimit,
+  diversify,
+  groupIntoMatters,
+  knowledgeCaveat,
   selectForAnalysis
 } from '../src/core/assistant/capabilities/mail-analysis'
 import { assessAttention, scoreMessages } from '../src/core/communication/mail-intelligence'
@@ -371,6 +375,7 @@ describe('the analysis shortlist is chosen deterministically', () => {
     }),
     message({
       id: 'audit',
+      conversationId: 'c-audit',
       subject: 'Audit evidence deadline',
       preview: 'Compliance evidence required before the closing date.'
     }),
@@ -477,6 +482,7 @@ function mixedInbox(): Array<Record<string, unknown>> {
   return [
     graphMessage({
       id: 'noise-1',
+      conversationId: 'c-noise-1',
       subject: 'How did we do? Review your recent purchase',
       bodyPreview: 'Leave a review of your recent order and tell us what you think.',
       body: { contentType: 'text', content: 'Leave a review of your recent order.' },
@@ -485,6 +491,7 @@ function mixedInbox(): Array<Record<string, unknown>> {
     }),
     graphMessage({
       id: 'noise-2',
+      conversationId: 'c-noise-2',
       subject: '40% off everything — limited time',
       bodyPreview: 'Shop now and save. Sale ends Sunday. Unsubscribe any time.',
       body: { contentType: 'text', content: 'Shop now and save. Sale ends Sunday.' },
@@ -493,6 +500,7 @@ function mixedInbox(): Array<Record<string, unknown>> {
     }),
     graphMessage({
       id: 'noise-3',
+      conversationId: 'c-noise-3',
       subject: 'You have 4 new notifications',
       bodyPreview: 'Someone viewed your profile. Manage your email preferences.',
       body: { contentType: 'text', content: 'Someone viewed your profile.' },
@@ -501,6 +509,7 @@ function mixedInbox(): Array<Record<string, unknown>> {
     }),
     graphMessage({
       id: 'invoice',
+      conversationId: 'c-invoice',
       subject: 'Invoice INV-2291 is overdue',
       bodyPreview: 'The amount due of $4,180 is now past due. Please arrange payment.',
       body: {
@@ -667,8 +676,10 @@ describe('the briefing prompt, end to end', () => {
 
     const reply = await router.ask('Give me my daily briefing.')
 
-    assert.match(reply.text, /No meetings today/i)
-    assert.match(reply.text, /clear|nothing/i)
+    // "No meetings showing" is a fact about the connected calendar. "Your day
+    // is clear" is a claim about the user's life that Jarvis cannot make.
+    assert.match(reply.text, /No meetings are showing on your connected calendar today/i)
+    assert.equal(/\byour day is (clear|free|open)\b/i.test(reply.text), false)
     assert.equal(provider!.calls.length, 0, 'nothing to summarise means nothing is sent')
   })
 
@@ -771,5 +782,441 @@ describe('the safety architecture is untouched', () => {
     const { router } = await harness(t, mock)
     const reply = await router.ask('Find my latest GTA operational plan.')
     assert.equal(reply.capability, 'documents')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Live-test round 2: grouping, epistemic honesty, and a diverse shortlist
+// ---------------------------------------------------------------------------
+
+/**
+ * The second round of live testing found three things.
+ *
+ *   1. Asking for five emails returned four distinct matters, because two
+ *      notices about the same invoice number were counted separately.
+ *   2. Jarvis told the user to "pay the outstanding amount" and to avoid
+ *      "leaving this supplier unpaid" — claims about their accounting system,
+ *      which it cannot see. An email saying a bill is due is not evidence that
+ *      it is still unpaid.
+ *   3. One kind of matter filled the whole shortlist, so a compliance deadline
+ *      and a client waiting on a decision never appeared.
+ */
+
+function matters(messages: MailMessage[]) {
+  return groupIntoMatters(scoreMessages(messages, OWN))
+}
+
+describe('related messages become one matter', () => {
+  test('two notices sharing a reference code are one matter', () => {
+    const grouped = matters([
+      message({
+        id: 'first',
+        conversationId: 'c-1',
+        subject: 'Invoice INV-0258 for August services',
+        from: { name: 'Accounts', address: 'accounts@supplier.example' },
+        preview: 'Please find attached invoice INV-0258. Payment is due on 30 September.'
+      }),
+      message({
+        id: 'second',
+        conversationId: 'c-2',
+        subject: 'Final notice: INV-0258 overdue',
+        from: { name: 'Credit Control', address: 'credit@supplier.example' },
+        preview: 'INV-0258 remains past due. Please arrange payment.'
+      })
+    ])
+
+    assert.equal(grouped.length, 1, 'one invoice number is one matter')
+    assert.equal(grouped[0]!.messages.length, 2)
+    // The more pressing of the two represents it.
+    assert.equal(grouped[0]!.primary.id, 'second')
+  })
+
+  test('a threaded conversation is one matter', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'thread-9', subject: 'Support plan review', preview: 'Could you please confirm the dates?' }),
+      message({ id: 'b', conversationId: 'thread-9', subject: 'Re: Support plan review', preview: 'Following up — could you please advise?' })
+    ])
+    assert.equal(grouped.length, 1)
+  })
+
+  test('chasing prefixes on one subject from one domain are one matter', () => {
+    const grouped = matters([
+      message({
+        id: 'a',
+        conversationId: 'c-1',
+        subject: 'Quarterly compliance audit evidence',
+        from: { name: 'Quality', address: 'quality@auditor.example' },
+        preview: 'We need the corrective action evidence.'
+      }),
+      message({
+        id: 'b',
+        conversationId: 'c-2',
+        subject: 'Reminder: Re: Quarterly compliance audit evidence',
+        from: { name: 'Quality Team', address: 'team@auditor.example' },
+        preview: 'Still awaiting the corrective action evidence.'
+      })
+    ])
+    assert.equal(grouped.length, 1)
+  })
+
+  test('genuinely different matters stay separate', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'c-1', subject: 'Invoice INV-0258 due', preview: 'Payment due.' }),
+      message({ id: 'b', conversationId: 'c-2', subject: 'Invoice INV-0442 due', preview: 'Payment due.' }),
+      message({ id: 'c', conversationId: 'c-3', subject: 'Audit evidence required', preview: 'Compliance evidence needed before the closing date.' })
+    ])
+    assert.equal(grouped.length, 3)
+  })
+
+  test('a bare year or figure is not a reference code', () => {
+    // "due 30 September 2026" must not make two unrelated emails one matter.
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'c-1', subject: 'Insurance renewal 2026', preview: 'Renewal due by the closing date.' }),
+      message({ id: 'b', conversationId: 'c-2', subject: 'Staff roster 2026', preview: 'Could you please confirm the roster?' })
+    ])
+    assert.equal(grouped.length, 2)
+  })
+
+  test('grouping knows nothing about invoices or any business', async () => {
+    const source = await (await import('node:fs/promises')).readFile(
+      'src/core/assistant/capabilities/mail-analysis.ts',
+      'utf8'
+    )
+    const code = source.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')
+    for (const forbidden of ['bunnings', 'hizus', 'gta', 'titan', 'ndis', 'supplier']) {
+      assert.equal(new RegExp(`\\b${forbidden}\\b`, 'i').test(code), false, `must not mention "${forbidden}"`)
+    }
+    // "invoice" may appear in prompt wording as an example, never in the rules
+    // that decide grouping.
+    assert.equal(/INV|invoice/i.test(String(/const REFERENCE =[\s\S]*?\n/.exec(source)?.[0])), false)
+  })
+})
+
+describe('the requested count means distinct matters', () => {
+  /** Six messages, five matters: two of them are the same reference. */
+  function duplicatedInbox(): Array<Record<string, unknown>> {
+    return [
+      graphMessage({
+        id: 'ref-a',
+        conversationId: 'c-a',
+        subject: 'Invoice INV-0258 for August services',
+        bodyPreview: 'Invoice INV-0258 attached. The amount due is $2,400, payable by 30 September.',
+        body: { contentType: 'text', content: 'Invoice INV-0258 attached. Amount due $2,400 by 30 September.' },
+        from: { emailAddress: { name: 'Accounts', address: 'accounts@one.example' } },
+        receivedDateTime: '2026-09-17T09:00:00Z'
+      }),
+      graphMessage({
+        id: 'ref-b',
+        conversationId: 'c-b',
+        subject: 'Final notice — INV-0258 overdue',
+        bodyPreview: 'INV-0258 shows an amount due of $2,650 and is past due.',
+        body: { contentType: 'text', content: 'INV-0258 shows an amount due of $2,650 and is past due.' },
+        from: { emailAddress: { name: 'Credit Control', address: 'credit@one.example' } },
+        receivedDateTime: '2026-09-17T15:00:00Z'
+      }),
+      graphMessage({
+        id: 'compliance',
+        conversationId: 'c-c',
+        subject: 'Corrective action evidence required',
+        bodyPreview: 'Please provide your compliance evidence before the closing date.',
+        body: { contentType: 'text', content: 'Please provide your compliance evidence before the closing date.' },
+        from: { emailAddress: { name: 'Quality', address: 'quality@two.example' } },
+        receivedDateTime: '2026-09-17T12:00:00Z'
+      }),
+      graphMessage({
+        id: 'decision',
+        conversationId: 'c-d',
+        subject: 'Sign-off needed on the service agreement',
+        bodyPreview: 'Approval required before we proceed. Awaiting your decision.',
+        body: { contentType: 'text', content: 'Approval required before we proceed. Awaiting your decision.' },
+        from: { emailAddress: { name: 'Amir Hassan', address: 'amir@three.example' } },
+        receivedDateTime: '2026-09-17T11:00:00Z'
+      }),
+      graphMessage({
+        id: 'request',
+        conversationId: 'c-e',
+        subject: 'Updated support plan',
+        bodyPreview: 'Could you please send the updated plan so we can review it?',
+        body: { contentType: 'text', content: 'Could you please send the updated plan so we can review it?' },
+        from: { emailAddress: { name: 'Jane Cooper', address: 'jane@four.example' } },
+        receivedDateTime: '2026-09-17T10:00:00Z'
+      }),
+      graphMessage({
+        id: 'operational',
+        conversationId: 'c-f',
+        subject: 'Complaint about last week’s shift',
+        bodyPreview: 'A client has raised a complaint about the roster change.',
+        body: { contentType: 'text', content: 'A client has raised a complaint about the roster change.' },
+        from: { emailAddress: { name: 'Site Lead', address: 'lead@five.example' } },
+        receivedDateTime: '2026-09-17T08:00:00Z'
+      })
+    ]
+  }
+
+  test('asking for five returns five distinct matters, not five raw messages', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: duplicatedInbox() } }
+    ])
+    const { router, provider } = await harness(t, mock)
+
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    const sent = String(provider!.calls[0]!.request.messages[0]!.content)
+
+    // Five matters were asked for and five were prepared.
+    assert.match(sent, /5 distinct matters/)
+    assert.equal((sent.match(/^- Matter \d+:/gm) ?? []).length, 5)
+
+    // The duplicated reference is one of them, carrying both messages.
+    assert.match(sent, /- Matter \d+: excerpts \[\d+\], \[\d+\]/)
+    assert.match(sent, /more than one message/i)
+
+    // And every distinct matter made the list, so nothing was crowded out.
+    const ids = (reply.messages ?? []).map((m) => m.id)
+    for (const id of ['compliance', 'decision', 'request', 'operational']) {
+      assert.ok(ids.includes(id), `${id} should have been analysed`)
+    }
+    assert.ok(ids.includes('ref-a') && ids.includes('ref-b'), 'both notices are shown')
+  })
+
+  test('the lead line counts matters and says when messages were grouped', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: duplicatedInbox() } }
+    ])
+    const { router } = await harness(t, mock)
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    assert.match(reply.text, /5 matters need your attention, across 6 messages\./)
+  })
+
+  test('a shorter count still selects whole matters', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: duplicatedInbox() } }
+    ])
+    const { router, provider } = await harness(t, mock)
+    await router.ask('Summarise the top 2 emails that need my attention.')
+    const sent = String(provider!.calls[0]!.request.messages[0]!.content)
+    assert.equal((sent.match(/^- Matter \d+:/gm) ?? []).length, 2)
+  })
+})
+
+describe('Jarvis distinguishes what the email says from what it knows', () => {
+  test('the analysis prompt forbids asserting payment status', () => {
+    assert.match(MAIL_ANALYSIS_SYSTEM, /never assert that money is still owed/i)
+    assert.match(MAIL_ANALYSIS_SYSTEM, /cannot see their bank, their accounting system/i)
+    assert.match(MAIL_ANALYSIS_SYSTEM, /confirm its payment status against the user's own records/i)
+    assert.match(MAIL_ANALYSIS_SYSTEM, /arrange payment only if it turns out to still be outstanding/i)
+  })
+
+  test('the brief prompt carries the same rule', async () => {
+    const source = await (await import('node:fs/promises')).readFile(
+      'src/core/communication/daily-brief.ts',
+      'utf8'
+    )
+    assert.match(source, /it does not mean the day is free, clear or open/i)
+    assert.match(source, /never assert that money is still owed/i)
+  })
+
+  test('a financial matter carries Jarvis’s own statement of what it cannot see', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'c-1', subject: 'Invoice INV-0258 overdue', preview: 'The amount due is past due.' })
+    ])
+    const caveat = knowledgeCaveat(grouped)
+    assert.ok(caveat)
+    assert.match(caveat!, /I can only see your mail, not your accounts or records/)
+    assert.match(caveat!, /whether these amounts have already been paid/)
+  })
+
+  test('nothing financial or time-bound means no caveat', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'c-1', subject: 'Complaint about the roster', preview: 'A dispute has been raised.' })
+    ])
+    assert.equal(knowledgeCaveat(grouped), null)
+  })
+
+  test('the caveat reaches the user on a real analysis', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: mixedInbox() } }
+    ])
+    const { router } = await harness(t, mock, {
+      // Exactly the kind of sentence the live test flagged.
+      provider: new FakeProvider(() => 'Pay the outstanding amount to avoid leaving this supplier unpaid.')
+    })
+
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    assert.match(reply.text, /I can only see your mail, not your accounts or records/)
+  })
+
+  test('an empty calendar is a fact about the calendar, not about the day', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: [] } },
+      { match: '/me/calendarView', body: { value: [] } }
+    ])
+    const { router } = await harness(t, mock)
+
+    const reply = await router.ask('Give me my daily briefing.')
+    assert.match(reply.text, /No meetings are showing on your connected calendar today/i)
+    for (const claim of [/your day is clear/i, /your day is open/i, /the whole day is (free|open)/i, /you are free all day/i]) {
+      assert.equal(claim.test(reply.text), false, `must not claim: ${claim}`)
+    }
+  })
+})
+
+describe('the shortlist spreads across different kinds of problem', () => {
+  /** Five financial matters from one sender, plus two other kinds. */
+  function lopsided(): MailMessage[] {
+    const financial = Array.from({ length: 5 }, (_, i) =>
+      message({
+        id: `fin-${i}`,
+        conversationId: `c-fin-${i}`,
+        subject: `Invoice INV-${1000 + i} is overdue`,
+        from: { name: 'Accounts', address: 'accounts@one.example' },
+        preview: 'The amount due is past due. Please arrange payment.',
+        receivedAt: NOW - (i + 1) * 60_000
+      })
+    )
+    return [
+      ...financial,
+      message({
+        id: 'compliance',
+        conversationId: 'c-comp',
+        subject: 'Corrective action evidence required',
+        from: { name: 'Quality', address: 'quality@two.example' },
+        preview: 'Please provide the compliance evidence.',
+        receivedAt: NOW - 600_000
+      }),
+      message({
+        id: 'decision',
+        conversationId: 'c-dec',
+        subject: 'Sign-off needed',
+        from: { name: 'Amir Hassan', address: 'amir@three.example' },
+        preview: 'Approval required. Awaiting your decision.',
+        receivedAt: NOW - 700_000
+      })
+    ]
+  }
+
+  test('one loud category does not consume the whole top N', () => {
+    const picked = diversify(matters(lopsided()), 3)
+    const categories = picked.map((m) => m.categories[0])
+    assert.equal(new Set(categories).size, 3, `expected three kinds, got ${categories.join(', ')}`)
+  })
+
+  test('the most pressing matter is still first', () => {
+    const all = matters(lopsided())
+    const top = [...all].sort((a, b) => b.score - a.score)[0]!
+    assert.equal(diversify(all, 3)[0]!.key, top.key)
+  })
+
+  test('a category that genuinely dominates still fills the list', () => {
+    // Nothing but financial matters available: the list is financial.
+    const onlyFinancial = matters(lopsided().filter((m) => m.id.startsWith('fin-')))
+    const picked = diversify(onlyFinancial, 3)
+    assert.equal(picked.length, 3)
+    assert.ok(picked.every((m) => m.categories[0] === 'financial'))
+  })
+
+  test('within a category a second sender is preferred over a second message', () => {
+    const picked = diversify(
+      matters([
+        message({ id: 'a', conversationId: 'c-a', subject: 'Invoice INV-1001 overdue', from: { name: 'Accounts', address: 'accounts@one.example' }, preview: 'Past due.' }),
+        message({ id: 'b', conversationId: 'c-b', subject: 'Invoice INV-1002 overdue', from: { name: 'Accounts', address: 'accounts@one.example' }, preview: 'Past due.' }),
+        message({ id: 'c', conversationId: 'c-c', subject: 'Invoice INV-1003 overdue', from: { name: 'Billing', address: 'billing@two.example' }, preview: 'Past due.' })
+      ]),
+      2
+    )
+    const domains = picked.map((m) => m.primary.from!.address.split('@')[1])
+    assert.equal(new Set(domains).size, 2, 'two suppliers beat two invoices from one')
+  })
+
+  test('the end-to-end shortlist covers distinct kinds of matter', async (t) => {
+    const many = [
+      ...Array.from({ length: 6 }, (_, i) =>
+        graphMessage({
+          id: `fin-${i}`,
+          conversationId: `c-fin-${i}`,
+          subject: `Invoice INV-${2000 + i} is overdue`,
+          bodyPreview: 'The amount due is past due. Please arrange payment.',
+          body: { contentType: 'text', content: 'Amount due is past due.' },
+          from: { emailAddress: { name: 'Accounts', address: 'accounts@one.example' } },
+          receivedDateTime: new Date(NOW - (i + 1) * 60_000).toISOString()
+        })
+      ),
+      graphMessage({
+        id: 'compliance',
+        conversationId: 'c-comp',
+        subject: 'Corrective action evidence required',
+        bodyPreview: 'Please provide the compliance evidence.',
+        body: { contentType: 'text', content: 'Please provide the compliance evidence.' },
+        from: { emailAddress: { name: 'Quality', address: 'quality@two.example' } },
+        receivedDateTime: new Date(NOW - 600_000).toISOString()
+      }),
+      graphMessage({
+        id: 'decision',
+        conversationId: 'c-dec',
+        subject: 'Sign-off needed',
+        bodyPreview: 'Approval required. Awaiting your decision.',
+        body: { contentType: 'text', content: 'Approval required. Awaiting your decision.' },
+        from: { emailAddress: { name: 'Amir Hassan', address: 'amir@three.example' } },
+        receivedDateTime: new Date(NOW - 700_000).toISOString()
+      })
+    ]
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: many } }
+    ])
+    const { router } = await harness(t, mock)
+
+    const reply = await router.ask('Summarise the 3 most important emails that need my attention.')
+    const ids = (reply.messages ?? []).map((m) => m.id)
+
+    assert.ok(ids.includes('compliance'), 'the compliance deadline must not be crowded out')
+    assert.ok(ids.includes('decision'), 'the decision waiting on the user must not be crowded out')
+    assert.equal(ids.filter((id) => id.startsWith('fin-')).length, 1, 'one financial matter, not three')
+  })
+})
+
+describe('the refinement did not weaken anything', () => {
+  test('grouping and diversity still send nothing for plain retrieval', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: mixedInbox() } }
+    ])
+    const { router, provider, mock: m } = await harness(t, mock)
+
+    await router.ask('What needs my attention in my inbox?')
+    assert.equal(provider!.calls.length, 0)
+    assert.equal(m.mutatingCalls().length, 0)
+  })
+
+  test('the bound on what is sent still holds with grouping', async (t) => {
+    // One matter per thread, each with several messages: the ceiling must hold.
+    const many = Array.from({ length: 40 }, (_, i) =>
+      graphMessage({
+        id: `m-${i}`,
+        conversationId: `c-${i % 4}`,
+        subject: `Audit evidence required for site ${i % 4}`,
+        bodyPreview: 'Compliance evidence needed before the closing date.',
+        body: { contentType: 'text', content: 'Compliance evidence needed before the closing date.' },
+        receivedDateTime: new Date(NOW - i * 60_000).toISOString()
+      })
+    )
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: { value: many } }])
+    const { router, provider } = await harness(t, mock)
+
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    const sent = String(provider!.calls[0]!.request.messages[0]!.content)
+    const excerpts = (sent.match(/^\[\d+\]$/gm) ?? []).length
+
+    assert.ok(excerpts <= 15, `sent ${excerpts} excerpts, ceiling is 15`)
+    assert.equal(reply.disclosure!.excerptCount, excerpts, 'disclosure matches what was sent')
+    assert.equal(reply.messages!.length, excerpts, 'every card was analysed')
+  })
+
+  test('disclosure still names the provider and the accounts', async (t) => {
+    const mock = new GraphMock([
+      { match: '/me/mailFolders/inbox/messages', body: { value: mixedInbox() } }
+    ])
+    const { router } = await harness(t, mock)
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    assert.equal(reply.disclosure!.providerId, 'fake')
+    assert.deepEqual(reply.disclosure!.accountLabels, ['GTA'])
+    assert.equal(reply.disclosure!.itemKind, 'emails')
   })
 })

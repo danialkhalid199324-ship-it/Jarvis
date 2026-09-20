@@ -177,7 +177,11 @@ export class JarvisRouter {
 
 /** What is in the diary, in one honest sentence. */
 function briefCalendarLine(facts: DailyBrief['facts']): string {
-  if (facts.meetingsToday.length === 0) return 'No meetings today.'
+  // Not "your day is clear": Jarvis can see the connected calendar and nothing
+  // else, so an empty one is a fact about the calendar, not about the day.
+  if (facts.meetingsToday.length === 0) {
+    return 'No meetings are showing on your connected calendar today.'
+  }
   const count = `${facts.meetingsToday.length} ${
     facts.meetingsToday.length === 1 ? 'meeting' : 'meetings'
   } today`
