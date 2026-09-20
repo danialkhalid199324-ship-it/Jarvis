@@ -458,10 +458,10 @@ describe('calendar changes require approval', () => {
     assert.equal(mock.mutatingCalls().length, 0, 'the calendar must be untouched')
 
     // The proposal shows before and after.
-    const timeField = reply.pendingAction!.preview.find((f) => f.label === 'Time')!
-    assert.ok(timeField.previous, 'must show the current time')
-    assert.ok(timeField.value, 'must show the proposed time')
-    assert.notEqual(timeField.previous, timeField.value)
+    const whenField = reply.pendingAction!.preview.find((f) => f.label === 'When')!
+    assert.ok(whenField.previous, 'must show the current time')
+    assert.ok(whenField.value, 'must show the proposed time')
+    assert.notEqual(whenField.previous, whenField.value)
     assert.equal(approvals.pending().length, 1)
   })
 

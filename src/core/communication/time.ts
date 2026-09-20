@@ -92,9 +92,45 @@ export function parseDayReference(text: string, now: number): number {
   return startOfDay(now)
 }
 
-/** Combine a day and a minutes-since-midnight into an absolute time. */
+/**
+ * Combine a day and a minutes-since-midnight into an absolute time.
+ *
+ * Set on a Date rather than added as milliseconds. A day is not always 24
+ * hours: on the morning clocks go forward, `dayStart + 19h` lands at 8 PM, not
+ * 7 PM. Australian daylight saving makes that a real, twice-yearly wrong
+ * answer for a calendar, so the wall-clock time is set directly and the
+ * runtime resolves the offset.
+ */
 export function atTimeOnDay(dayStart: number, minutesSinceMidnight: number): number {
-  return dayStart + minutesSinceMidnight * 60_000
+  const d = new Date(dayStart)
+  d.setHours(0, 0, 0, 0)
+  d.setMinutes(minutesSinceMidnight)
+  return d.getTime()
+}
+
+/** Minutes since local midnight for an absolute time. */
+export function minutesOfDay(at: number): number {
+  const d = new Date(at)
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+/** The length of an event in whole minutes. */
+export function durationMinutes(start: number, end: number): number {
+  return Math.round((end - start) / 60_000)
+}
+
+/** Move a time onto another day, keeping its wall-clock time. */
+export function withDay(dayStart: number, at: number): number {
+  return atTimeOnDay(dayStart, minutesOfDay(at))
+}
+
+/** Render a duration the way a person says it. */
+export function formatDuration(minutes: number): string {
+  if (minutes < 60) return `${minutes} minutes`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  const hourLabel = hours === 1 ? '1 hour' : `${hours} hours`
+  return rest === 0 ? hourLabel : `${hourLabel} ${rest} minutes`
 }
 
 export function formatTime(epochMs: number): string {

@@ -105,7 +105,12 @@ const TOMORROW = /\btomorrow'?s?\b/i
 const TODAY = /\b(today'?s?|this morning|this afternoon|this evening|tonight)\b/i
 const WEEK = /\b(this week|next week|the week|my week|coming (week|days)|rest of the week)\b/i
 const FREE = /\b(free|available|availability|gap|open slot|spare time)\b/i
-const CREATE = /\b(book|schedule|set up|create|arrange|organis[ez]e|put in)\b.*\b(meeting|call|appointment|time|catch[- ]?up)\b/i
+const CREATE =
+  /\b(book|schedule|set up|create|arrange|organis[ez]e|put in)\b.*\b(meeting|call|appointment|time|catch[- ]?up)\b/i
+/** "Add the GTA review to my calendar" names no meeting noun but is a create. */
+const CREATE_INTO_CALENDAR = /\b(add|put)\b.*\b(?:to|in|on)\s+(?:my\s+)?(calendar|diary|schedule)\b/i
+/** "Make it 30 minutes longer" / "make my 7 PM meeting an hour" are updates. */
+const RESIZE = /\b(make|extend|shorten|lengthen|reduce|stretch)\b.*\b(hours?|hrs?|minutes?|mins?|longer|shorter)\b/i
 const UPDATE = /\b(move|reschedul\w*|shift|change|push|bring forward|postpone)\b/i
 const CANCEL = /\b(cancel|call off|drop|delete)\b.*\b(meeting|call|appointment|event|invite)\b|\bcancel (the|my|tomorrow'?s)\b/i
 
@@ -177,8 +182,8 @@ function mailIntentFor(question: string): MailIntent {
 
 function calendarIntentFor(question: string): CalendarIntent {
   if (CANCEL.test(question)) return 'prepare_cancel'
-  if (UPDATE.test(question)) return 'prepare_update'
-  if (CREATE.test(question)) return 'prepare_create'
+  if (UPDATE.test(question) || RESIZE.test(question)) return 'prepare_update'
+  if (CREATE.test(question) || CREATE_INTO_CALENDAR.test(question)) return 'prepare_create'
   if (FREE.test(question)) return 'free'
   if (WEEK.test(question)) return 'week'
   if (TOMORROW.test(question)) return 'tomorrow'
@@ -212,6 +217,9 @@ export function routeQuestion(question: string, context: RoutingContext): Route 
   if (CALENDAR_PHRASES.test(text)) calendar += 3
   if (CALENDAR_WEAK.test(text)) calendar += 1
   if (CALENDAR_ACTION_VERB.test(text) && MEETING_CONTEXT.test(text)) calendar += 3
+  // Phrasings that name no meeting noun but are unmistakably calendar work.
+  if (CREATE_INTO_CALENDAR.test(text)) calendar += 3
+  if (RESIZE.test(text) && MEETING_CONTEXT.test(text)) calendar += 3
   if (DOCUMENT_STRONG.test(text)) documents += 3
 
   // A follow-up with no subject of its own stays where the conversation is.

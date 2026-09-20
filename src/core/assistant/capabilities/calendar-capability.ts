@@ -5,13 +5,22 @@ import { findFreeSlots } from '../../microsoft/calendar'
 import type { ApprovalEngine } from '../../communication/approvals'
 import {
   atTimeOnDay,
+  durationMinutes,
   formatDay,
+  formatDuration,
   formatRange,
   formatTime,
   parseDayReference,
   parseTimeOfDay,
-  windowFor
+  startOfDay,
+  windowFor,
+  withDay
 } from '../../communication/time'
+import {
+  parseCreateInstruction,
+  parseUpdateInstruction,
+  type UpdateInstruction
+} from '../../communication/calendar-language'
 import type { Route } from '../routing'
 import type {
   ApprovalField,
@@ -82,7 +91,7 @@ export class CalendarCapability {
       case 'prepare_cancel':
         return this.prepareCancel(question, route)
       case 'prepare_create':
-        return this.prepareCreate(question)
+        return this.prepareCreate(question, route)
       case 'free':
         return this.handleFree(question, route)
       default:
@@ -165,65 +174,203 @@ export class CalendarCapability {
 
   // -- preparing changes: nothing is executed here -----------------------
 
-  /** Best match for a meeting the user named in plain words. */
-  private matchEvent(question: string, events: readonly CalendarEvent[]): CalendarEvent | null {
-    const words = question
-      .toLowerCase()
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 2)
+  /**
+   * Find the event the user meant.
+   *
+   * Scores on the things that actually identify a meeting — distinctive words
+   * from its title and its start time — rather than counting how many words of
+   * the sentence happen to appear in the subject, which "meeting" and "for"
+   * satisfy for almost anything.
+   *
+   * Returns the winner only when it is a clear winner. A tie is reported as
+   * ambiguous, because quietly picking one of two plausible meetings and then
+   * offering to cancel it is the worst thing this code could do.
+   */
+  private matchEvent(
+    instruction: { referenceWords: string[]; referenceTitle: string | null; referenceStartMinutes: number | null },
+    events: readonly CalendarEvent[]
+  ): { event: CalendarEvent } | { ambiguous: CalendarEvent[] } | null {
+    if (events.length === 0) return null
 
-    let best: { event: CalendarEvent; score: number } | null = null
-    for (const event of events) {
+    const scored = events.map((event) => {
       const subject = event.subject.toLowerCase()
-      const score = words.filter((w) => subject.includes(w)).length
-      if (score > 0 && (!best || score > best.score)) best = { event, score }
-    }
-    return best?.event ?? null
+      let score = 0
+
+      // An explicit title the user typed is the strongest signal there is.
+      if (instruction.referenceTitle) {
+        const title = instruction.referenceTitle.toLowerCase()
+        if (subject === title) score += 10
+        else if (subject.includes(title) || title.includes(subject)) score += 6
+      }
+
+      // Distinctive words from the title, command vocabulary already removed.
+      for (const word of instruction.referenceWords) {
+        if (subject.includes(word)) score += 2
+      }
+
+      // "my 7 PM meeting" identifies by clock time, which is often the only
+      // thing the user gives.
+      if (instruction.referenceStartMinutes !== null) {
+        const startMinutes = new Date(event.start).getHours() * 60 + new Date(event.start).getMinutes()
+        if (startMinutes === instruction.referenceStartMinutes) score += 5
+        else score -= 2
+      }
+
+      return { event, score }
+    })
+
+    const best = Math.max(...scored.map((s) => s.score))
+    if (best <= 0) return null
+
+    const winners = scored.filter((s) => s.score === best).map((s) => s.event)
+    if (winners.length > 1) return { ambiguous: winners }
+    return { event: winners[0]! }
   }
 
-  private async prepareUpdate(question: string, route: Route): Promise<JarvisReply> {
-    const day = parseDayReference(question, this.now())
+  /** The events Jarvis should look through for a change instruction. */
+  private async lookupEvents(
+    instruction: UpdateInstruction,
+    route: Route
+  ): Promise<{
+    result: Awaited<ReturnType<MicrosoftWorkspace['listEvents']>>
+    match: { event: CalendarEvent } | { ambiguous: CalendarEvent[] } | null
+  }> {
     const accountId = this.resolveAccountId(route)
     const result = await this.deps.workspace.listEvents({
       ...(accountId ? { accountId } : {}),
-      from: day,
-      to: day + 86_400_000
+      from: instruction.searchDay,
+      to: instruction.searchDay + 86_400_000
     })
+    return { result, match: this.matchEvent(instruction, result.items) }
+  }
 
-    const event = this.matchEvent(question, result.items)
-    if (!event) {
+  /** A reply asking which meeting was meant, with no action attached. */
+  private ambiguous(
+    candidates: CalendarEvent[],
+    result: { checkedAccounts: string[]; failures: Array<{ reason: string }> },
+    verb: string
+  ): JarvisReply {
+    return this.reply({
+      text:
+        `More than one meeting matches that, so I have not prepared anything to ${verb}. ` +
+        `Tell me which one by name or start time: ` +
+        candidates.map((e) => `"${e.subject}" at ${formatTime(e.start)}`).join(', ') +
+        '.',
+      events: candidates,
+      result,
+      kind: 'insufficient'
+    })
+  }
+
+  /**
+   * Work out the proposed start and end.
+   *
+   * Only what the user asked about changes. Move a meeting and it keeps its
+   * length; change its length and it keeps its start. That is the whole point
+   * of separating the reference from the request during parsing.
+   */
+  private proposeTimes(
+    event: CalendarEvent,
+    instruction: UpdateInstruction
+  ): { start: number; end: number; changed: string[] } {
+    const currentMinutes = durationMinutes(event.start, event.end)
+    const changed: string[] = []
+
+    // Date: only if the user named a destination day.
+    let start = instruction.targetDay !== null ? withDay(instruction.targetDay, event.start) : event.start
+    if (instruction.targetDay !== null && startOfDay(instruction.targetDay) !== startOfDay(event.start)) {
+      changed.push('date')
+    }
+
+    // Start time: only if the user named a destination time.
+    if (instruction.targetStartMinutes !== null) {
+      start = atTimeOnDay(startOfDay(start), instruction.targetStartMinutes)
+      changed.push('start time')
+    }
+
+    // Length: an absolute request wins over a relative one; otherwise keep it.
+    let minutes = currentMinutes
+    if (instruction.newDurationMinutes !== null) {
+      minutes = instruction.newDurationMinutes
+    } else if (instruction.durationDeltaMinutes !== null) {
+      minutes = currentMinutes + instruction.durationDeltaMinutes
+    }
+    if (minutes !== currentMinutes) changed.push('duration')
+    // A meeting cannot be zero-length or negative.
+    minutes = Math.max(minutes, 5)
+
+    return { start, end: start + minutes * 60_000, changed }
+  }
+
+  private async prepareUpdate(question: string, route: Route): Promise<JarvisReply> {
+    const instruction = parseUpdateInstruction(question, this.now())
+    const { result, match } = await this.lookupEvents(instruction, route)
+
+    if (!match) {
       return this.reply({
-        text: `I could not find that meeting on ${formatDay(day)}. Nothing has been changed.`,
+        text: `I could not find that meeting on ${formatDay(instruction.searchDay)}. Nothing has been changed.`,
         events: result.items,
         result,
         kind: 'insufficient',
         suggestions: ['Name the meeting as it appears in your calendar.', 'Say which day it is on.']
       })
     }
+    if ('ambiguous' in match) return this.ambiguous(match.ambiguous, result, 'change')
 
-    const minutes = parseTimeOfDay(question)
-    if (minutes === null) {
+    const event = match.event
+    const asked =
+      instruction.targetStartMinutes !== null ||
+      instruction.targetDay !== null ||
+      instruction.newDurationMinutes !== null ||
+      instruction.durationDeltaMinutes !== null
+
+    if (!asked) {
       return this.reply({
-        text: `I found "${event.subject}" but not a new time. Nothing has been changed — tell me the time to move it to.`,
+        text:
+          `I found "${event.subject}" (${formatRange(event.start, event.end)}) but could not work out what to change. ` +
+          'Nothing has been changed — tell me a new time, a new day, or a new length.',
         events: [event],
         result,
-        kind: 'insufficient'
+        kind: 'insufficient',
+        suggestions: [
+          `Move "${event.subject}" to 3 PM.`,
+          `Make "${event.subject}" 1 hour.`,
+          `Move "${event.subject}" to Friday.`
+        ]
       })
     }
 
-    // Keep the meeting's length; the user asked to move it, not resize it.
-    const newStart = atTimeOnDay(day, minutes)
-    const newEnd = newStart + (event.end - event.start)
+    const proposed = this.proposeTimes(event, instruction)
+
+    // No-op guard. Proposing a change that changes nothing would put an
+    // Apply button in front of the user that writes the existing values back
+    // to Microsoft 365 — a pointless mutation and a misleading card.
+    if (proposed.start === event.start && proposed.end === event.end) {
+      return this.reply({
+        text:
+          `"${event.subject}" is already ${formatDay(event.start)}, ${formatRange(event.start, event.end)}. ` +
+          'That matches what you asked for, so there is nothing to change and I have not prepared an action.',
+        events: [event],
+        result,
+        kind: 'insufficient',
+        suggestions: ['Say the new time or length explicitly, for example "make it 1 hour".']
+      })
+    }
 
     const preview: ApprovalField[] = [
       { label: 'Account', value: event.accountLabel },
       { label: 'Meeting', value: event.subject },
       {
-        label: 'Time',
+        label: 'When',
         previous: `${formatDay(event.start)}, ${formatRange(event.start, event.end)}`,
-        value: `${formatDay(newStart)}, ${formatRange(newStart, newEnd)}`
-      }
+        value: `${formatDay(proposed.start)}, ${formatRange(proposed.start, proposed.end)}`
+      },
+      {
+        label: 'Length',
+        previous: formatDuration(durationMinutes(event.start, event.end)),
+        value: formatDuration(durationMinutes(proposed.start, proposed.end))
+      },
+      { label: 'Changing', value: proposed.changed.join(', ') || 'time' }
     ]
     if (event.attendees.length > 0) {
       preview.push({
@@ -235,7 +382,7 @@ export class CalendarCapability {
     const action = this.deps.approvals.propose<UpdateEventPayload>({
       type: 'UPDATE_EVENT',
       riskLevel: event.attendees.length > 0 ? 'high' : 'medium',
-      description: `Move "${event.subject}" to ${formatTime(newStart)}`,
+      description: `Change "${event.subject}" to ${formatRange(proposed.start, proposed.end)}`,
       source: question,
       accountId: event.accountId,
       accountLabel: event.accountLabel,
@@ -243,39 +390,43 @@ export class CalendarCapability {
       ...(event.attendees.length > 0
         ? { warning: 'Everyone invited will receive an updated meeting notice.' }
         : {}),
-      payload: { accountId: event.accountId, eventId: event.id, changes: { start: newStart, end: newEnd } }
+      // Exactly the values shown above, so the card and the Graph write cannot
+      // drift apart.
+      payload: {
+        accountId: event.accountId,
+        eventId: event.id,
+        changes: { start: proposed.start, end: proposed.end }
+      }
     })
 
     return this.proposal(
-      `I have prepared the change below. Your calendar has not been touched — review it and approve to apply it.`,
+      'I have prepared the change below. Your calendar has not been touched — review it and approve to apply it.',
       action,
       [event]
     )
   }
 
   private async prepareCancel(question: string, route: Route): Promise<JarvisReply> {
-    const day = parseDayReference(question, this.now())
-    const accountId = this.resolveAccountId(route)
-    const result = await this.deps.workspace.listEvents({
-      ...(accountId ? { accountId } : {}),
-      from: day,
-      to: day + 86_400_000
-    })
+    const instruction = parseUpdateInstruction(question, this.now())
+    const { result, match } = await this.lookupEvents(instruction, route)
 
-    const event = this.matchEvent(question, result.items)
-    if (!event) {
+    if (!match) {
       return this.reply({
-        text: `I could not find that meeting on ${formatDay(day)}. Nothing has been cancelled.`,
+        text: `I could not find that meeting on ${formatDay(instruction.searchDay)}. Nothing has been cancelled.`,
         events: result.items,
         result,
-        kind: 'insufficient'
+        kind: 'insufficient',
+        suggestions: ['Name the meeting as it appears in your calendar.', 'Say which day it is on.']
       })
     }
+    if ('ambiguous' in match) return this.ambiguous(match.ambiguous, result, 'cancel')
 
+    const event = match.event
     const preview: ApprovalField[] = [
       { label: 'Account', value: event.accountLabel },
       { label: 'Meeting', value: event.subject },
       { label: 'When', value: `${formatDay(event.start)}, ${formatRange(event.start, event.end)}` },
+      { label: 'Length', value: formatDuration(durationMinutes(event.start, event.end)) },
       {
         label: 'Attendees who will be told it is cancelled',
         value:
@@ -307,33 +458,43 @@ export class CalendarCapability {
     )
   }
 
-  private async prepareCreate(question: string): Promise<JarvisReply> {
-    const day = parseDayReference(question, this.now())
-    const minutes = parseTimeOfDay(question)
+  /** How long a new meeting runs when the user does not say. */
+  private static readonly DEFAULT_CREATE_MINUTES = 60
 
-    if (minutes === null) {
+  private async prepareCreate(question: string, route: Route): Promise<JarvisReply> {
+    const instruction = parseCreateInstruction(question, this.now())
+
+    if (instruction.startMinutes === null) {
       return notice(
         'Tell me the day and time for the meeting and I will prepare it for your approval.'
       )
     }
 
+    // Honour a named account, the same way changes and cancellations do.
+    const accountId = this.resolveAccountId(route)
     const accounts = this.deps.workspace.accounts()
-    const account = accounts[0]
+    const account = accountId ? accounts.find((a) => a.id === accountId) : accounts[0]
     if (!account) return notice('No Microsoft account is connected.')
 
-    const start = atTimeOnDay(day, minutes)
-    // A sensible default the user can see and correct before approving.
-    const end = start + 60 * 60_000
+    const start = atTimeOnDay(instruction.dayStart, instruction.startMinutes)
+    const minutes = instruction.durationMinutes ?? CalendarCapability.DEFAULT_CREATE_MINUTES
+    const end = start + minutes * 60_000
 
-    const subjectMatch = /\b(?:meeting|call|catch[- ]?up)\s+(?:with\s+)?([A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)?)/.exec(question)
-    const withWhom = subjectMatch?.[1]?.trim()
-    const subject = withWhom ? `Meeting with ${withWhom}` : 'New meeting'
+    // A placeholder the user can see and correct, never an invented title.
+    const subject = instruction.title ?? 'New meeting'
 
     const preview: ApprovalField[] = [
       { label: 'Account', value: account.label },
       { label: 'Title', value: subject },
-      { label: 'When', value: `${formatDay(start)}, ${formatRange(start, end)}` },
-      { label: 'Attendees', value: 'None yet — add them in Outlook after it is created' },
+      { label: 'Date', value: formatDay(start) },
+      { label: 'Time', value: formatRange(start, end) },
+      {
+        label: 'Length',
+        value: instruction.durationMinutes
+          ? formatDuration(minutes)
+          : `${formatDuration(minutes)} (default — say "for 30 minutes" to change it)`
+      },
+      { label: 'Attendees', value: 'None — add them in Outlook after it is created' },
       { label: 'Location', value: 'Not set' }
     ]
 
@@ -345,6 +506,9 @@ export class CalendarCapability {
       accountId: account.id,
       accountLabel: account.label,
       preview,
+      ...(instruction.title
+        ? {}
+        : { warning: 'You did not give the meeting a title, so it will be created as "New meeting".' }),
       payload: { accountId: account.id, subject, start, end, attendees: [] }
     })
 
