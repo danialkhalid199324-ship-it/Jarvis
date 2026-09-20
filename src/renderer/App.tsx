@@ -100,9 +100,16 @@ export function App(): React.JSX.Element {
           fixed at the bottom while only the conversation scrolls. Every other
           route keeps the ordinary scrolling page. */}
       <main className={route === 'home' ? 'main main--chat' : 'main'}>
-        {route === 'home' && settings ? (
-          <HomePage settings={settings} onOpenRoute={(next) => setRoute(next)} />
-        ) : null}
+        {/* Keep Home mounted so its session conversation survives navigation. */}
+        <div hidden={route !== 'home'} className="home-session">
+          {settings ? (
+            <HomePage
+              settings={settings}
+              active={route === 'home'}
+              onOpenRoute={(next) => setRoute(next)}
+            />
+          ) : null}
+        </div>
 
         <div className="main__inner" hidden={route === 'home'}>
           {route === 'files' ? <FilesPage settings={settings} /> : null}

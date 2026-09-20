@@ -424,11 +424,17 @@ export function selectForAnalysis(
 
   // Each matter contributes its primary plus a little of its context, under a
   // ceiling that holds however many matters there are.
-  const candidates: ScoredMailMessage[] = []
-  for (const matter of selected) {
-    for (const message of matter.messages.slice(0, 1 + MAX_RELATED_PER_MATTER)) {
+  // Give every selected matter one slot before adding related context. Filling
+  // matter-by-matter allowed early threads to exhaust the global cap, after
+  // which later selected matters had no excerpt and disappeared at synthesis.
+  const candidates: ScoredMailMessage[] = selected
+    .map((matter) => matter.primary)
+    .slice(0, MAX_ANALYSIS_MESSAGES)
+  for (let relatedIndex = 0; relatedIndex < MAX_RELATED_PER_MATTER; relatedIndex++) {
+    for (const matter of selected) {
       if (candidates.length >= MAX_ANALYSIS_MESSAGES) break
-      candidates.push(message)
+      const related = matter.related[relatedIndex]
+      if (related) candidates.push(related)
     }
   }
 

@@ -154,8 +154,8 @@ export function parseTimePhrases(text: string): TimePhrase[] {
     found.push({ minutes, index, target: TARGET_MARKER.test(text.slice(0, index)) })
   }
 
-  // "7pm", "7:30 pm", "7 p.m."
-  const meridiem = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s?m\.?\b/gi
+  // "7pm", "7:30 pm", "7.30pm", "7 p.m."
+  const meridiem = /\b(\d{1,2})(?:[:.](\d{2}))?\s*([ap])\.?\s?m\.?\b/gi
   let m: RegExpExecArray | null
   while ((m = meridiem.exec(text)) !== null) {
     let hour = Number(m[1])

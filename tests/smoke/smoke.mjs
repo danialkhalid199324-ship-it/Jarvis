@@ -199,7 +199,9 @@ check(
 
 // --- model picker ---------------------------------------------------------
 await page.click('.nav__item:has-text("Settings")')
-await page.waitForSelector('#model')
+// Provider descriptors load asynchronously; the field is briefly a free-text
+// input before the known-model select is available.
+await page.waitForSelector('select#model')
 const modelOptions = await page.$$eval('#model option', (els) => els.map((e) => e.value))
 check(
   'Opus 5 and Sonnet 5 are both offered',
@@ -215,6 +217,10 @@ check('Opus 5 remains available', (await page.inputValue('#model')) === 'claude-
 await page.screenshot({ path: path.join(OUT, '08-model-picker.png') })
 await page.click('.nav__item:has-text("Home")')
 await page.waitForSelector('.chat__composer')
+check(
+  'Home conversation survives navigation',
+  ((await page.textContent('.conversation')) ?? '').includes('Find my latest GTA operational plan')
+)
 
 // --- V0.2: communication surfaces are honest with no account connected ---
 await page.click('.nav__item:has-text("Messages")')

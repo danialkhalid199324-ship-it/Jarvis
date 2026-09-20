@@ -156,6 +156,7 @@ describe('calendar language — times', () => {
   test('reads clock formats', () => {
     assert.deepEqual(times('at 7pm'), [[19 * 60, false]])
     assert.deepEqual(times('at 7:30pm'), [[19 * 60 + 30, false]])
+    assert.deepEqual(times('starting 7.30pm'), [[19 * 60 + 30, false]])
     assert.deepEqual(times('at 7 PM'), [[19 * 60, false]])
     assert.deepEqual(times('at 15:45'), [[15 * 60 + 45, false]])
     assert.deepEqual(times('at 12 am'), [[0, false]])
@@ -209,6 +210,14 @@ describe('calendar language — titles', () => {
 })
 
 describe('calendar language — whole instructions', () => {
+  test('reads the exact live create instruction', () => {
+    const parsed = parseCreateInstruction(
+      'add a meeting today in my calendar starting 7.30pm for an hour - Resource Company Sale',
+      NOW
+    )
+    assert.equal(parsed.startMinutes, 19 * 60 + 30)
+    assert.equal(parsed.durationMinutes, 60)
+  })
   test('the reported duration-change sentence is read correctly', () => {
     const u = parseUpdateInstruction(
       'meeting for today that starts at 7pm for half an hour can we change to 1 hour meeting',

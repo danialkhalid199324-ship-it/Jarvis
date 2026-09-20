@@ -99,6 +99,13 @@ const ASSERTIONS: Array<{ pattern: RegExp; label: string }> = [
 const ATTRIBUTED =
   /\b(?:if|whether|unless|once|should it|provided|assuming|confirm\w*|reconcil\w+|verif\w+|states?|stated|says?|said|according to|claims?|indicates?|appears?|reportedly|may|might|could)\b/i
 
+/** Payment directions need their own, stricter conditional check. Attribution
+ * elsewhere in a sentence does not make "confirm X before paying" safe. */
+const PAYMENT_ACTION =
+  /\b(?:pay(?:ing)?|settle|clear|discharge|release)\b[^.!?]{0,100}\b(?:invoice|bill|amount|balance|payment|it|them|both|all|aud|usd|gbp|eur|\$)\b|\b(?:invoice|bill|amount|balance|payment)\b[^.!?]{0,100}\b(?:pay(?:ing)?|settle|clear|discharge|release)\b/i
+const CONDITIONAL_PAYMENT =
+  /\b(?:if|whether|unless|only if|should)\b[^.!?]{0,120}\b(?:pay(?:ing)?|settle|clear|discharge|release|arrange payment)\b/i
+
 /** Split into sentences, keeping enough of each to quote back. */
 function sentences(text: string): string[] {
   return text
@@ -120,6 +127,13 @@ export interface UnsupportedClaim {
 export function findUnsupportedClaims(text: string): UnsupportedClaim[] {
   const found: UnsupportedClaim[] = []
   for (const sentence of sentences(text)) {
+    if (PAYMENT_ACTION.test(sentence) && !CONDITIONAL_PAYMENT.test(sentence)) {
+      found.push({
+        sentence: sentence.slice(0, 200),
+        label: 'instructs or recommends payment without making it conditional on verified status'
+      })
+      continue
+    }
     if (ATTRIBUTED.test(sentence)) continue
     for (const { pattern, label } of ASSERTIONS) {
       if (pattern.test(sentence)) {

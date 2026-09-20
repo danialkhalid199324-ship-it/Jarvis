@@ -1407,6 +1407,8 @@ describe('the grouping is in the payload, not in a request to the model', () => 
 describe('unsupported claims never reach the user', () => {
   const LIVE_CLAIMS = [
     'Review the invoice online and pay it.',
+    'Confirm with the sender which version is correct before paying it.',
+    'You risk paying AUD 4,222.00 twice.',
     'It is payable now.',
     'Resolve that before releasing any payment.',
     'Pay the Hizus and MJ Facility balances together.',

@@ -28,9 +28,11 @@ const EXAMPLES = [
 
 export function HomePage({
   settings,
+  active,
   onOpenRoute
 }: {
   settings: JarvisSettings
+  active: boolean
   onOpenRoute: (route: 'messages' | 'calendar' | 'files') => void
 }): React.JSX.Element {
   const [question, setQuestion] = useState('')
@@ -149,7 +151,8 @@ export function HomePage({
             </p>
           </header>
 
-          <DashboardCards onOpen={onOpenRoute} />
+          {/* Refresh live counts on return without remounting the conversation. */}
+          <DashboardCards key={active ? 'active' : 'inactive'} onOpen={onOpenRoute} />
 
           {!hasFolders ? (
             <div className="notice">
@@ -303,7 +306,8 @@ function MessageSection({
   const hidden = messages.length - shown.length
 
   return (
-    <>
+    <details className="supporting-evidence">
+      <summary>{written ? `Messages behind this (${messages.length})` : `${messages.length} messages`}</summary>
       <div className="section-label">
         {written
           ? hidden > 0
@@ -325,7 +329,7 @@ function MessageSection({
           <div>· {hidden} more not shown here — open Messages to see the full list.</div>
         </div>
       ) : null}
-    </>
+    </details>
   )
 }
 
@@ -362,7 +366,8 @@ function ReplyBody({
       ) : null}
 
       {grouped.length > 0 ? (
-        <div className="sources">
+        <details className="sources supporting-evidence">
+          <summary>Sources ({grouped.length})</summary>
           <div className="section-label" style={{ margin: '0 0 var(--s-3)' }}>
             Based on {grouped.length === 1 ? 'this file' : 'these files'}
           </div>
@@ -385,7 +390,7 @@ function ReplyBody({
               )
             })}
           </div>
-        </div>
+        </details>
       ) : null}
 
       {reply.disclosure ? <Disclosure disclosure={reply.disclosure} /> : null}
@@ -393,7 +398,8 @@ function ReplyBody({
       {reply.coverage ? <div className="notice">{reply.coverage}</div> : null}
 
       {reply.mailSources && reply.mailSources.length > 0 ? (
-        <div className="sources">
+        <details className="sources supporting-evidence">
+          <summary>Messages behind this ({reply.mailSources.length})</summary>
           <div className="section-label" style={{ margin: '0 0 var(--s-3)' }}>
             Based on {reply.mailSources.length === 1 ? 'this email' : 'these emails'}
           </div>
@@ -410,7 +416,7 @@ function ReplyBody({
               </div>
             ))}
           </div>
-        </div>
+        </details>
       ) : null}
 
       {reply.events && reply.events.length > 0 ? (
