@@ -42,7 +42,8 @@ describe('mail attention scoring', () => {
   test('newsletters and automated senders are pushed down', () => {
     const newsletter = msg({
       from: { emailAddress: { name: 'Acme News', address: 'no-reply@acme.example' } },
-      subject: 'Our monthly newsletter — unsubscribe any time'
+      subject: 'Our monthly newsletter — unsubscribe any time',
+      bodyPreview: 'This month: product news, tips and a round-up. Unsubscribe any time.'
     })
     assert.equal(assessAttention(newsletter, { ownAddresses: OWN }).needsAttention, false)
   })
@@ -71,7 +72,7 @@ describe('mail attention scoring', () => {
   test('urgency language raises the score and is explained', () => {
     const urgent = assessAttention(msg({ subject: 'URGENT: deadline tomorrow' }), { ownAddresses: OWN })
     assert.ok(urgent.reasons.includes('says it is urgent'))
-    assert.ok(urgent.reasons.includes('mentions a deadline'))
+    assert.ok(urgent.reasons.includes('has a deadline'))
   })
 
   test('mail you sent yourself is not treated as a request', () => {
@@ -253,7 +254,13 @@ describe('email retrieval end to end', () => {
         body: {
           value: [
             graphMessage({ id: 'urgent', subject: 'URGENT: please confirm the audit date', importance: 'high' }),
-            graphMessage({ id: 'news', subject: 'Monthly newsletter', from: { emailAddress: { address: 'no-reply@x.example' } }, isRead: true })
+            graphMessage({
+              id: 'news',
+              subject: 'Monthly newsletter',
+              from: { emailAddress: { address: 'no-reply@x.example' } },
+              bodyPreview: 'Our monthly round-up. Unsubscribe any time.',
+              isRead: true
+            })
           ]
         }
       }
@@ -333,7 +340,7 @@ describe('answering from mail sends only what it read', () => {
     const { mail } = await harness(t, mock, { provider })
 
     const q = 'What happened with the Bluebird invoice?'
-    const reply = await mail.handle(q, { capability: 'mail', mailIntent: 'answer', searchTerms: 'Bluebird invoice', reason: 'test' })
+    const reply = await mail.handle(q, { capability: 'mail', shape: 'retrieve', mailIntent: 'answer', searchTerms: 'Bluebird invoice', reason: 'test' })
 
     assert.equal(reply.kind, 'answer')
     assert.ok(reply.disclosure)
@@ -354,7 +361,7 @@ describe('answering from mail sends only what it read', () => {
     ])
     const provider = planningProvider('INSUFFICIENT: these messages say nothing about that.')
     const { mail } = await harness(t, mock, { provider })
-    const reply = await mail.handle('What happened?', { capability: 'mail', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
+    const reply = await mail.handle('What happened?', { capability: 'mail', shape: 'retrieve', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
     assert.equal(reply.kind, 'insufficient')
     assert.match(reply.text, /could not find enough/i)
   })
@@ -379,7 +386,7 @@ describe('answering from mail sends only what it read', () => {
       logger,
       maxContextChars: () => 60_000
     })
-    const reply = await mail.handle('What happened?', { capability: 'mail', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
+    const reply = await mail.handle('What happened?', { capability: 'mail', shape: 'retrieve', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
     assert.equal(reply.kind, 'notice')
     assert.match(reply.text, /AI provider/i)
     assert.ok(reply.messages!.length > 0, 'retrieval still works without AI')
@@ -417,7 +424,7 @@ describe('drafting never sends', () => {
       { match: '/me/messages', body: { value: [graphMessage()] } }
     ])
     const { mail } = await harness(t, mock, { provider: planningProvider('Reply body.') })
-    const reply = await mail.handle('Draft a reply to Sarah.', { capability: 'mail', mailIntent: 'draft', reason: 't' })
+    const reply = await mail.handle('Draft a reply to Sarah.', { capability: 'mail', shape: 'retrieve', mailIntent: 'draft', reason: 't' })
 
     const draft = reply.draft!
     assert.deepEqual(draft.to.map((r) => r.address), ['sarah@client.example'])
@@ -675,6 +682,7 @@ describe('mail views use the right ordering', () => {
     const { mail } = await harness(t, mock)
     const reply = await mail.handle('Show my unread emails.', {
       capability: 'mail',
+      shape: 'retrieve',
       mailIntent: 'unread',
       reason: 'test'
     })
@@ -686,6 +694,7 @@ describe('mail views use the right ordering', () => {
     const { mail } = await harness(t, mock)
     const reply = await mail.handle('Find the email about the audit.', {
       capability: 'mail',
+      shape: 'retrieve',
       mailIntent: 'search',
       searchTerms: 'audit',
       reason: 'test'
@@ -717,6 +726,7 @@ describe('mail views use the right ordering', () => {
             graphMessage({
               id: 'newest-newsletter',
               subject: 'Monthly newsletter — unsubscribe any time',
+              bodyPreview: 'This month: product news and a round-up. Unsubscribe any time.',
               isRead: true,
               from: { emailAddress: { address: 'no-reply@acme.example' } },
               receivedDateTime: '2026-09-20T08:00:00Z'

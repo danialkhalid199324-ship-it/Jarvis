@@ -8,30 +8,111 @@ import type {
  * Deciding what needs attention — without calling an AI model.
  *
  * Every signal here is a fact Microsoft already told us, or a pattern in text
- * Jarvis can check itself. That matters for three reasons: it is free, it is
- * instant, and it is explainable — the user can see exactly why a message was
- * raised rather than being asked to trust a model's judgement.
+ * Jarvis can check itself: free, instant, and explainable, so the user can see
+ * why a message was raised rather than being asked to trust a model.
  *
- * AI is used afterwards, on the short list this produces, to summarise and
- * prioritise. It is never used to do the filtering.
+ * The scoring separates two things that used to be added together, which is
+ * what let a shop's "how did we do?" email outrank a compliance deadline:
+ *
+ *   ENGAGEMENT   unread, addressed to you, asks a question. Cheap to satisfy —
+ *                marketing is *designed* to satisfy all of them.
+ *   SIGNIFICANCE money, deadlines, compliance, decisions, a person asking you
+ *                for something. Hard to fake, and what actually makes a message
+ *                an executive's problem.
+ *
+ * Engagement alone can raise a message, but weakly and only when nothing marks
+ * it as a mailing. Significance is what carries a message to the top, and it is
+ * also what protects a genuine automated email — an overdue invoice from a
+ * billing system — from being suppressed alongside the marketing.
+ *
+ * No business, sender or domain is hardcoded: the signals are generic, so a
+ * brand-new client is treated exactly like an established one.
  */
 
 /** A message at or above this score is surfaced as needing attention. */
 export const ATTENTION_THRESHOLD = 3
 
-const URGENCY_PATTERNS: Array<{ pattern: RegExp; points: number; reason: string }> = [
-  { pattern: /\b(urgent|asap|immediately)\b/i, points: 3, reason: 'says it is urgent' },
-  { pattern: /\b(deadline|due (today|tomorrow|by)|overdue)\b/i, points: 3, reason: 'mentions a deadline' },
-  { pattern: /\b(please (confirm|advise|review|approve|respond|reply))\b/i, points: 2, reason: 'asks you to respond' },
+/** Bulk evidence at or above this means a mailing rather than correspondence. */
+const BULK_THRESHOLD = 2
+
+/** Significance at or above this overrides bulk and automated-sender suppression. */
+const SIGNIFICANCE_OVERRIDE = 4
+
+/** Signals that a message is genuinely someone's business problem. */
+const SIGNIFICANCE_PATTERNS: Array<{ pattern: RegExp; points: number; reason: string }> = [
+  { pattern: /\b(overdue|past due|final notice|arrears|unpaid)\b/i, points: 5, reason: 'overdue' },
+  {
+    pattern: /\b(invoice|remittance|payment|amount due|outstanding balance|statement of account)\b/i,
+    points: 4,
+    reason: 'concerns payment'
+  },
+  {
+    pattern: /\b(audit|compliance|regulator\w*|breach|incident|non[- ]?conformance|corrective action|show cause)\b/i,
+    points: 4,
+    reason: 'concerns compliance'
+  },
+  {
+    pattern: /\b(deadline|due (?:today|tomorrow|by|on)|expires?|closing date|cut[- ]?off|close of business|\bcob\b)/i,
+    points: 4,
+    reason: 'has a deadline'
+  },
+  {
+    pattern: /\b(please (?:approve|sign|authorise|authorize)|approval required|sign[- ]?off|your decision|awaiting your)\b/i,
+    points: 4,
+    reason: 'waiting on your decision'
+  },
+  { pattern: /\b(urgent|asap|immediately|critical|escalat\w+)\b/i, points: 4, reason: 'says it is urgent' },
+  {
+    pattern: /\b(complaint|dispute|cancellation|termination|outage|failure)\b/i,
+    points: 3,
+    reason: 'operational or relationship issue'
+  },
+  {
+    pattern: /\b(please (?:advise|review|respond|reply|provide|send|confirm)|could you please|can you please|i need|we need)\b/i,
+    points: 3,
+    reason: 'someone is asking you for something'
+  },
+  {
+    pattern: /\b(contract|agreement|proposal|quote|tender|submission|renewal)\b/i,
+    points: 2,
+    reason: 'concerns an agreement'
+  }
+]
+
+/** Weak human-engagement signals. Useful for ordering, never for priority. */
+const ENGAGEMENT_PATTERNS: Array<{ pattern: RegExp; points: number; reason: string }> = [
   { pattern: /\b(can you|could you|are you able|would you)\b/i, points: 1, reason: 'contains a request' },
-  { pattern: /\b(invoice|payment|remittance|overdue account)\b/i, points: 1, reason: 'concerns payment' },
-  { pattern: /\b(audit|compliance|breach|incident|notice)\b/i, points: 1, reason: 'concerns compliance' },
   { pattern: /\?\s*$|\?\s/, points: 1, reason: 'asks a question' }
 ]
 
-/** Senders whose mail is almost never actionable. */
-const LOW_VALUE_SENDER = /\b(no-?reply|do-?not-?reply|notifications?|mailer|newsletter|marketing|automated)\b/i
-const BULK_SUBJECT = /\b(unsubscribe|newsletter|webinar|special offer|% off|sale ends)\b/i
+/**
+ * Evidence that a message is a mailing rather than correspondence.
+ *
+ * Content is weighted above the sender address on purpose: plenty of things
+ * worth reading arrive from `no-reply`, invoices and system alerts included.
+ */
+const BULK_PATTERNS: Array<{ pattern: RegExp; points: number }> = [
+  {
+    pattern: /\b(unsubscribe|manage (?:your )?preferences|view (?:this )?(?:email )?in (?:your )?browser|email preferences|opt out)\b/i,
+    points: 3
+  },
+  {
+    pattern: /\b(how did we do|rate your|review your (?:recent )?(?:purchase|order|experience|stay)|leave a review|tell us what you think|your feedback|take (?:our|the|a) (?:quick )?survey|share your (?:experience|thoughts))\b/i,
+    points: 3
+  },
+  {
+    pattern: /\b(\d+% off|sale (?:ends|now)|special offer|limited time|deal of the|discount code|free shipping|shop now|buy now)\b/i,
+    points: 3
+  },
+  { pattern: /\b(newsletter|webinar|round[- ]?up|digest|bulletin)\b/i, points: 2 },
+  {
+    pattern: /\b(you have \d+ new|new (?:connection|follower|notification)s?|someone (?:viewed|liked|commented)|don'?t miss|spare (?:a few|\d+) minutes?)\b/i,
+    points: 2
+  }
+]
+
+const BULK_SENDER =
+  /(\bno-?reply|\bdo-?not-?reply|\bnoreply|\bnotifications?\b|\bnewsletters?\b|\bmarketing\b|\bmailer\b|\bcampaign\b|\bupdates?@|\bnews@|\bpromo|\binfo@)/i
 
 export interface AttentionContext {
   /** The signed-in user's own addresses, to tell "to me" from "cc'd".  */
@@ -48,82 +129,118 @@ export function assessAttention(
   context: AttentionContext
 ): AttentionAssessment {
   const reasons: string[] = []
-  let score = 0
+  let engagement = 0
+  let significance = 0
+  let bulk = 0
 
   const own = context.ownAddresses.map((a) => a.toLowerCase())
   const isOwn = (address: string): boolean => own.includes(address.toLowerCase())
+  const text = `${message.subject} ${message.preview}`
+  const fromAddress = message.from?.address ?? ''
+  const fromName = message.from?.name ?? ''
 
-  // -- what Microsoft told us -------------------------------------------
-  if (!message.isRead) {
-    score += 2
-    reasons.push('unread')
+  // -- is this a mailing? ------------------------------------------------
+  for (const { pattern, points } of BULK_PATTERNS) {
+    if (pattern.test(text)) bulk += points
   }
-  if (message.importance === 'high') {
-    score += 3
-    reasons.push('marked high importance')
+  const looksAutomated = BULK_SENDER.test(fromAddress) || BULK_SENDER.test(fromName)
+  if (looksAutomated) bulk += 1
+
+  // -- does it actually matter? -----------------------------------------
+  for (const { pattern, points, reason } of SIGNIFICANCE_PATTERNS) {
+    if (pattern.test(text)) {
+      significance += points
+      reasons.push(reason)
+    }
   }
+  // Flagging is a deliberate act by the user, so it is a fact about the
+  // business rather than something a sender can claim.
   if (message.isFlagged) {
-    score += 3
+    significance += 4
     reasons.push('flagged by you')
   }
 
-  // -- who it was sent to ------------------------------------------------
+  // -- engagement --------------------------------------------------------
+  // Importance is set by the sender, so a mailing can assert it. It counts,
+  // but only as engagement.
+  if (message.importance === 'high') {
+    engagement += 3
+    reasons.push('marked high importance')
+  }
+  if (!message.isRead) {
+    engagement += 2
+    reasons.push('unread')
+  }
+
   const addressedDirectly = message.to.some((r) => isOwn(r.address))
   const ccOnly = !addressedDirectly && message.cc.some((r) => isOwn(r.address))
   if (addressedDirectly) {
-    score += 2
+    engagement += 2
     reasons.push('addressed to you directly')
-    // A message to you alone is more pointed than one to a distribution list.
     if (message.to.length === 1) {
-      score += 1
+      engagement += 1
       reasons.push('you are the only recipient')
     }
   } else if (ccOnly) {
-    score -= 1
+    engagement -= 1
     reasons.push('you were only copied in')
   }
 
-  // -- what it says ------------------------------------------------------
-  const text = `${message.subject} ${message.preview}`
-  for (const { pattern, points, reason } of URGENCY_PATTERNS) {
+  for (const { pattern, points, reason } of ENGAGEMENT_PATTERNS) {
     if (pattern.test(text)) {
-      score += points
+      engagement += points
       reasons.push(reason)
     }
   }
 
-  // -- what it plainly is not -------------------------------------------
-  const fromAddress = message.from?.address ?? ''
-  if (LOW_VALUE_SENDER.test(fromAddress) || LOW_VALUE_SENDER.test(message.from?.name ?? '')) {
-    score -= 4
-    reasons.push('automated sender')
-  }
-  if (BULK_SUBJECT.test(text)) {
-    score -= 3
-    reasons.push('looks like a bulk mailing')
-  }
-  // Mail you sent is never waiting on your reply, whatever else it contains.
-  const sentByUser = Boolean(fromAddress) && isOwn(fromAddress)
-  if (sentByUser) {
-    score -= 3
-    reasons.push('sent by you')
+  // A person writing to you personally outranks a system doing the same.
+  if (!looksAutomated && /\s/.test(fromName.trim())) {
+    engagement += 1
+    reasons.push('from a named person')
   }
 
-  // -- how long it has been waiting -------------------------------------
   const now = context.now ?? Date.now()
   const ageDays = (now - message.receivedAt) / 86_400_000
   if (!message.isRead && ageDays >= 2 && ageDays < 30) {
-    score += 1
+    engagement += 1
     reasons.push(`unread for ${Math.floor(ageDays)} days`)
   }
 
+  // -- suppression -------------------------------------------------------
+  const sentByUser = Boolean(fromAddress) && isOwn(fromAddress)
+  if (sentByUser) reasons.push('sent by you')
+
+  const isBulk = bulk >= BULK_THRESHOLD && significance < SIGNIFICANCE_OVERRIDE
+  const unimportantAutomation = looksAutomated && significance < SIGNIFICANCE_OVERRIDE
+  if (isBulk) reasons.push('looks like a marketing or notification mailing')
+  else if (unimportantAutomation) reasons.push('automated sender')
+
+  // Significance is doubled so that a real business matter outranks anything
+  // that is merely unread and addressed to you.
+  let score = significance * 2 + engagement
+  if (unimportantAutomation) score -= 3
+  if (isBulk) score -= 10
+
   return {
-    // A message from the user themselves is a note, not a request, so it is
-    // never raised no matter how urgent its wording.
-    needsAttention: !sentByUser && score >= ATTENTION_THRESHOLD,
+    // Three things are never raised however they score: mail the user sent,
+    // mail suppressed as a mailing, and anything below the bar.
+    needsAttention: !sentByUser && !isBulk && score >= ATTENTION_THRESHOLD,
     score,
     reasons
   }
+}
+
+/**
+ * Order a shortlist by how pressing each message is.
+ *
+ * Used by the analytical path to decide which candidates are worth spending
+ * tokens on, before any model is involved.
+ */
+export function rankByAttention(messages: readonly ScoredMailMessage[]): ScoredMailMessage[] {
+  return [...messages].sort((a, b) => {
+    if (b.attention.score !== a.attention.score) return b.attention.score - a.attention.score
+    return b.receivedAt - a.receivedAt
+  })
 }
 
 /**

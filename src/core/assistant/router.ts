@@ -6,7 +6,8 @@ import type { MailCapability } from './capabilities/mail-capability'
 import type { CalendarCapability } from './capabilities/calendar-capability'
 import type { DailyBriefService } from '../communication/daily-brief'
 import type { MicrosoftWorkspace } from '../microsoft/workspace'
-import type { JarvisReply } from '../../shared/communication'
+import { formatTime } from '../communication/time'
+import type { DailyBrief, JarvisReply } from '../../shared/communication'
 
 export interface RouterDeps {
   /** The V0.1 document assistant, used unchanged. */
@@ -132,28 +133,26 @@ export class JarvisRouter {
     }
   }
 
+  /**
+   * The daily brief, written as an executive would want to read it.
+   *
+   * One factual headline — what is in the diary, what is in the inbox — then
+   * the written summary. The cards underneath are evidence for it, not the
+   * answer itself, which is why the counts are stated in a sentence rather than
+   * left for the user to work out by scrolling.
+   */
   private async briefReply(signal?: AbortSignal): Promise<JarvisReply> {
     const brief = await this.deps.brief.build(signal)
     const { facts } = brief
 
-    const lines: string[] = []
-    lines.push(
-      facts.meetingsToday.length === 0
-        ? 'No meetings today.'
-        : `${facts.meetingsToday.length} ${facts.meetingsToday.length === 1 ? 'meeting' : 'meetings'} today.`
-    )
-    lines.push(
-      `${facts.unreadCount} unread, ${facts.needsAttentionCount} ${
-        facts.needsAttentionCount === 1 ? 'message looks' : 'messages look'
-      } like they need attention.`
-    )
-    if (brief.focus) lines.push('', brief.focus)
-    else if (brief.focusUnavailableReason) lines.push('', brief.focusUnavailableReason)
+    const headline = `${briefCalendarLine(facts)} ${briefMailLine(facts)}`.trim()
 
+    const body = brief.focus ?? brief.focusUnavailableReason ?? ''
     const reply: JarvisReply = {
       kind: 'answer',
       capability: 'brief',
-      text: lines.join('\n'),
+      shape: 'brief',
+      text: body ? `${headline}\n\n${body}` : headline,
       results: [],
       sources: [],
       suggestions: [],
@@ -174,4 +173,28 @@ export class JarvisRouter {
     this.lastCapability = 'documents'
     this.deps.session.clear()
   }
+}
+
+/** What is in the diary, in one honest sentence. */
+function briefCalendarLine(facts: DailyBrief['facts']): string {
+  if (facts.meetingsToday.length === 0) return 'No meetings today.'
+  const count = `${facts.meetingsToday.length} ${
+    facts.meetingsToday.length === 1 ? 'meeting' : 'meetings'
+  } today`
+  return facts.nextMeeting
+    ? `${count}, next at ${formatTime(facts.nextMeeting.start)}.`
+    : `${count}, all now finished.`
+}
+
+/** What is in the inbox, in one honest sentence. */
+function briefMailLine(facts: DailyBrief['facts']): string {
+  if (facts.unreadCount === 0 && facts.needsAttentionCount === 0) {
+    return 'Nothing unread and nothing flagged for attention.'
+  }
+  const unread = `${facts.unreadCount} unread`
+  return facts.needsAttentionCount === 0
+    ? `${unread}, none of which looks like it needs attention.`
+    : `${unread}, ${facts.needsAttentionCount} ${
+        facts.needsAttentionCount === 1 ? 'message needs' : 'messages need'
+      } attention.`
 }

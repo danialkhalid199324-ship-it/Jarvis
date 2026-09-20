@@ -11,16 +11,18 @@ import type {
   DashboardSummary
 } from '../../shared/communication'
 
-const BRIEF_SYSTEM = `You are Jarvis, writing the "focus" section of a busy executive's morning brief.
+const BRIEF_SYSTEM = `You are Jarvis, writing the executive summary at the top of a busy operator's daily brief.
 
-You will be given a factual summary of their day: meetings, and the emails that scored highest on objective signals. Follow these rules exactly:
+You will be given the facts of their day: the meetings in their calendar, and the emails that scored highest on Jarvis's own objective signals. Follow these rules exactly.
 
-1. Use ONLY what you are given. Never invent a meeting, a sender, a deadline or a number.
-2. Write 2–4 short sentences. This sits under a list of facts the user can already see, so do not repeat the list — say what it means.
-3. Lead with the single thing most worth their attention, and say why.
-4. Note any genuine collision or tight turnaround you can see in the times given.
-5. If there is genuinely little to flag, say so plainly in one sentence. Do not manufacture urgency.
-6. No greeting, no sign-off, no headings.`
+1. Use ONLY the facts given. Never invent a meeting, a sender, a deadline, an amount or a degree of urgency.
+2. Open with one or two sentences on the shape of the day — how much is in the calendar and the single thing most worth their attention.
+3. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what they want, and what the user has to do. Include a deadline or an amount only when the email states one; leave the point out entirely otherwise, and never write "not specified" or similar.
+4. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, a clear afternoon. Say nothing if there is nothing to say.
+5. Close with one line naming what to do first.
+6. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
+7. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
+8. No greeting, no sign-off, no headings, no restating of these instructions.`
 
 export interface BriefDeps {
   workspace: MicrosoftWorkspace
@@ -116,8 +118,18 @@ export class DailyBriefService {
         'Add an AI provider in Settings to get a written summary of what needs attention.'
       return brief
     }
+    // With no meetings and nothing scored worth acting on there is no material
+    // to summarise, and a model given only counts writes filler. Say what is
+    // actually true instead — including that unread mail was looked at.
     if (meetingsToday.length === 0 && priorityMail.length === 0) {
-      brief.focusUnavailableReason = 'Nothing to summarise — your day looks clear so far.'
+      brief.focusUnavailableReason =
+        accounts.length === 0
+          ? 'Connect a Microsoft account in Settings and I can brief you on your mail and calendar.'
+          : unreadCount === 0
+            ? 'Your calendar is clear today and there is nothing in your recent mail that needs attention.'
+            : `No meetings today, and nothing in your ${unreadCount} unread ${
+                unreadCount === 1 ? 'message' : 'messages'
+              } looks like it needs attention.`
       return brief
     }
 
@@ -134,6 +146,9 @@ export class DailyBriefService {
           meetingsToday
             .map((e) => `- ${formatTime(e.start)}–${formatTime(e.end)} ${e.subject} (${e.accountLabel})`)
             .join('\n'),
+      nextMeeting
+        ? `Next meeting: ${formatTime(nextMeeting.start)} ${nextMeeting.subject}.`
+        : 'No meetings remaining today.',
       `Unread email: ${unreadCount}. Scored as needing attention: ${needsAttentionCount}.`,
       bundle.excerpts.length > 0
         ? `Highest-scoring messages:\n${bundle.excerpts.map((e) => e.text).join('\n\n---\n\n')}`
@@ -144,7 +159,7 @@ export class DailyBriefService {
       const response = await provider.complete(
         {
           system: BRIEF_SYSTEM,
-          maxTokens: 600,
+          maxTokens: 1500,
           messages: [{ role: 'user', content: factSheet }],
           ...(signal ? { signal } : {})
         },

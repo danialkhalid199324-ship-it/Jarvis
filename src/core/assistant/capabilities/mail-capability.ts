@@ -3,7 +3,12 @@ import type { ProviderRegistry } from '../../ai/registry'
 import type { Logger } from '../../logging/logger'
 import type { MicrosoftWorkspace } from '../../microsoft/workspace'
 import { describeCoverage } from '../../microsoft/accounts'
-import { needingAttention, scoreMessages, sortByNewest } from '../../communication/mail-intelligence'
+import {
+  needingAttention,
+  rankByAttention,
+  scoreMessages,
+  sortByNewest
+} from '../../communication/mail-intelligence'
 import {
   buildMailExcerpts,
   citedMailSources,
@@ -11,7 +16,14 @@ import {
   renderMailExcerpts
 } from '../../communication/mail-context'
 import { draftReply } from '../../communication/drafts'
-import { extractSenderName, type Route } from '../routing'
+import { extractSenderName, wantsAttention, type Route } from '../routing'
+import {
+  ANALYSIS_CONTEXT_CHARS,
+  MAIL_ANALYSIS_SYSTEM,
+  analysisInstruction,
+  selectForAnalysis,
+  type AnalysisSelection
+} from './mail-analysis'
 import type {
   JarvisReply,
   MailMessage,
@@ -67,6 +79,18 @@ export class MailCapability {
   }
 
   async handle(question: string, route: Route, signal?: AbortSignal): Promise<JarvisReply> {
+    const reply = await this.dispatch(question, route, signal)
+    // The renderer decides how much to show from the shape, so every mail
+    // reply carries the one the router chose.
+    if (!reply.shape) reply.shape = route.shape
+    return reply
+  }
+
+  private async dispatch(
+    question: string,
+    route: Route,
+    signal?: AbortSignal
+  ): Promise<JarvisReply> {
     const workspace = this.deps.workspace
 
     if (!workspace.isConfigured()) {
@@ -83,6 +107,8 @@ export class MailCapability {
     switch (route.mailIntent) {
       case 'draft':
         return this.handleDraft(question, route, signal)
+      case 'analyse':
+        return this.handleAnalyse(question, route, signal)
       case 'attention':
         return this.handleAttention(route)
       case 'unread':
@@ -98,6 +124,24 @@ export class MailCapability {
 
   // -- retrieval only: nothing is sent anywhere --------------------------
 
+  /**
+   * Apply a count the user actually asked for.
+   *
+   * "Show me my last three emails" is a real instruction, and returning
+   * twenty-five is ignoring it. What is cut is always stated, so a shortened
+   * list never reads as the whole picture.
+   */
+  private applyCount(
+    route: Route,
+    messages: ScoredMailMessage[]
+  ): { shown: ScoredMailMessage[]; hidden: number } {
+    const count = route.count
+    if (count === undefined || count < 1 || messages.length <= count) {
+      return { shown: messages, hidden: 0 }
+    }
+    return { shown: messages.slice(0, count), hidden: messages.length - count }
+  }
+
   private async handleList(route: Route): Promise<JarvisReply> {
     const accountId = this.resolveAccountId(route)
     const result = await this.deps.workspace.listMail({ ...(accountId ? { accountId } : {}), limit: 25 })
@@ -106,15 +150,19 @@ export class MailCapability {
     const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
     const attention = scored.filter((m) => m.attention.needsAttention).length
     const unread = scored.filter((m) => !m.isRead).length
+    const { shown, hidden } = this.applyCount(route, scored)
 
     const where = accountId ? ` in ${result.checkedAccounts[0] ?? 'that account'}` : ''
     const text =
       scored.length === 0
         ? `No recent messages${where}.`
-        : `${scored.length} recent ${scored.length === 1 ? 'message' : 'messages'}${where}. ` +
-          `${unread} unread, ${attention} ${attention === 1 ? 'looks like it needs' : 'look like they need'} attention.`
+        : hidden > 0
+          ? `The ${shown.length} most recent of ${scored.length} messages${where}. ` +
+            `${unread} unread, ${attention} ${attention === 1 ? 'looks like it needs' : 'look like they need'} attention.`
+          : `${scored.length} recent ${scored.length === 1 ? 'message' : 'messages'}${where}. ` +
+            `${unread} unread, ${attention} ${attention === 1 ? 'looks like it needs' : 'look like they need'} attention.`
 
-    return this.reply({ text, messages: scored, result, kind: 'results' })
+    return this.reply({ text, messages: shown, result, kind: 'results' })
   }
 
   private async handleUnread(route: Route): Promise<JarvisReply> {
@@ -125,12 +173,15 @@ export class MailCapability {
       limit: 30
     })
     const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
+    const { shown, hidden } = this.applyCount(route, scored)
     return this.reply({
       text:
         scored.length === 0
           ? 'Nothing unread.'
-          : `${scored.length} unread ${scored.length === 1 ? 'message' : 'messages'}.`,
-      messages: scored,
+          : hidden > 0
+            ? `The ${shown.length} most recent of ${scored.length} unread messages.`
+            : `${scored.length} unread ${scored.length === 1 ? 'message' : 'messages'}.`,
+      messages: shown,
       result,
       kind: 'results'
     })
@@ -146,17 +197,24 @@ export class MailCapability {
     // they are read in. Mixing the two made the list jump around in time,
     // which is hard to scan. Every message keeps its score and reasons — the
     // badges and the "raised because…" line render from the message itself.
-    const flagged = sortByNewest(
-      needingAttention(result.items, { ownAddresses: this.ownAddresses() })
-    )
+    const flagged = needingAttention(result.items, { ownAddresses: this.ownAddresses() })
+
+    // A count is a request for the *most pressing* few, so the cut is made on
+    // score; the surviving messages are then shown newest first, which is how
+    // this list has always read.
+    const { shown: picked, hidden } = this.applyCount(route, rankByAttention(flagged))
+    const shown = sortByNewest(picked)
 
     const text =
       flagged.length === 0
         ? 'Nothing in your recent mail looks like it needs attention.'
-        : `${flagged.length} ${flagged.length === 1 ? 'message looks' : 'messages look'} like they need attention, newest first. ` +
-          `I picked these out on what Microsoft already tells me — unread, flagged, marked important, addressed to you directly — and on what the messages say.`
+        : hidden > 0
+          ? `The ${shown.length} most pressing of ${flagged.length} messages that need attention, newest first. ` +
+            `I picked these out on what Microsoft already tells me — unread, flagged, marked important, addressed to you directly — and on what the messages say.`
+          : `${flagged.length} ${flagged.length === 1 ? 'message looks' : 'messages look'} like they need attention, newest first. ` +
+            `I picked these out on what Microsoft already tells me — unread, flagged, marked important, addressed to you directly — and on what the messages say.`
 
-    return this.reply({ text, messages: flagged, result, kind: 'results' })
+    return this.reply({ text, messages: shown, result, kind: 'results' })
   }
 
   private async handleSearch(question: string, route: Route): Promise<JarvisReply> {
@@ -176,6 +234,7 @@ export class MailCapability {
     // Graph returns search hits in relevance order; newest first is what a
     // person scanning results actually wants.
     const scored = sortByNewest(scoreMessages(result.items, { ownAddresses: this.ownAddresses() }))
+    const { shown, hidden } = this.applyCount(route, scored)
 
     const where = accountId
       ? ` in ${result.checkedAccounts[0] ?? 'that account'}`
@@ -186,11 +245,13 @@ export class MailCapability {
     const text =
       scored.length === 0
         ? `I could not find any mail matching "${terms}"${where}.`
-        : `${scored.length} ${scored.length === 1 ? 'message' : 'messages'} matching "${terms}"${where}.`
+        : hidden > 0
+          ? `The ${shown.length} most recent of ${scored.length} messages matching "${terms}"${where}.`
+          : `${scored.length} ${scored.length === 1 ? 'message' : 'messages'} matching "${terms}"${where}.`
 
     return this.reply({
       text,
-      messages: scored,
+      messages: shown,
       result,
       kind: scored.length === 0 ? 'insufficient' : 'results',
       suggestions:
@@ -201,6 +262,164 @@ export class MailCapability {
               'If the message is older, it may be outside the mail Jarvis reads.'
             ]
           : []
+    })
+  }
+
+  // -- analysis: deterministic shortlist, then synthesis ------------------
+
+  /**
+   * "Summarise the five most important emails that need my attention."
+   *
+   * Three steps, in this order and never any other: retrieve with Graph's own
+   * filters, rank and cut with Jarvis's scoring, then — and only then — send a
+   * bounded shortlist to the provider. The model is asked to read what Jarvis
+   * already chose. It never chooses.
+   *
+   * Nothing here can send, create or change anything: this path has no write
+   * call in it, and the approval engine is not reachable from a capability.
+   */
+  private async handleAnalyse(
+    question: string,
+    route: Route,
+    signal?: AbortSignal
+  ): Promise<JarvisReply> {
+    const accountId = this.resolveAccountId(route)
+    // "…that need my attention" narrows what is analysed; "unread" narrows what
+    // is retrieved. Attention wins, because a request about what matters is not
+    // a request restricted to what happens to be unopened.
+    const attentionOnly = wantsAttention(question)
+    const unreadOnly = !attentionOnly && /\bunread\b/i.test(question)
+
+    const result = await this.deps.workspace.listMail({
+      ...(accountId ? { accountId } : {}),
+      ...(route.searchTerms ? { search: route.searchTerms } : {}),
+      ...(unreadOnly ? { unreadOnly: true } : {}),
+      limit: 40
+    })
+
+    const scored = scoreMessages(result.items, { ownAddresses: this.ownAddresses() })
+    const selection = selectForAnalysis(scored, {
+      ...(route.count !== undefined ? { requested: route.count } : {}),
+      attentionOnly
+    })
+
+    if (selection.candidates.length === 0) {
+      return this.reply({
+        text: attentionOnly
+          ? 'Nothing in your recent mail looks like it needs attention, so there is nothing to summarise.'
+          : unreadOnly
+            ? 'Nothing unread to summarise.'
+            : route.searchTerms
+              ? `I could not find any mail about "${route.searchTerms}" to summarise.`
+              : 'There is no recent mail to summarise.',
+        messages: [],
+        result,
+        kind: 'insufficient',
+        suggestions: attentionOnly
+          ? ['Ask for your recent mail instead, and I will show you what is there.']
+          : ['Try naming the sender or a word from the subject line.']
+      })
+    }
+
+    const provider = this.deps.providers.active()
+    if (!provider) {
+      return this.reply({
+        text:
+          `I have picked out the ${selection.candidates.length} that matter most, but reading them and telling you ` +
+          'what each one wants needs an AI provider. Add a key in Settings → AI Provider.',
+        messages: selection.candidates,
+        result,
+        kind: 'notice'
+      })
+    }
+
+    // Bodies are fetched only for the shortlist — never for everything read.
+    const detailed = await this.withBodies(selection.candidates)
+    const bundle = buildMailExcerpts(detailed, {
+      maxChars: Math.min(this.deps.maxContextChars(), ANALYSIS_CONTEXT_CHARS),
+      maxMessages: selection.candidates.length
+    })
+
+    if (bundle.excerpts.length === 0) {
+      return this.reply({
+        text: 'I picked out the messages below but could not read their contents.',
+        messages: selection.candidates,
+        result,
+        kind: 'insufficient'
+      })
+    }
+
+    // The cards shown are exactly the messages the model saw — if the budget
+    // cut one, it is not presented as analysed.
+    const analysedIds = new Set(bundle.excerpts.map((e) => e.messageId))
+    const analysed = selection.candidates.filter((m) => analysedIds.has(m.id))
+
+    const model = this.deps.providers.activeModelId
+    const disclosure = mailDisclosure(
+      bundle,
+      { id: provider.id, label: provider.label, local: provider.local },
+      model
+    )
+
+    this.deps.logger.info('mail.external_call', {
+      providerId: provider.id,
+      local: provider.local,
+      model,
+      intent: 'analyse',
+      excerptCount: bundle.excerpts.length,
+      charsSent: bundle.charsSent,
+      accounts: bundle.accountLabels
+    })
+
+    let text: string
+    try {
+      const response = await provider.complete(
+        {
+          system: MAIL_ANALYSIS_SYSTEM,
+          maxTokens: 2500,
+          messages: [
+            {
+              role: 'user',
+              content: `${analysisInstruction(question, bundle.excerpts.length)}\n\n${renderMailExcerpts(
+                bundle.excerpts
+              )}`
+            }
+          ],
+          ...(signal ? { signal } : {})
+        },
+        model
+      )
+      text = response.text.trim()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.deps.logger.error('mail.external_call_failed', { providerId: provider.id, error: message })
+      return this.reply({
+        text: `These are the messages that matter most, but I could not read them just now. ${message}`,
+        messages: selection.candidates,
+        result,
+        kind: 'notice'
+      })
+    }
+
+    if (text.toUpperCase().startsWith(INSUFFICIENT)) {
+      const detail = text.slice(INSUFFICIENT.length).replace(/^[:\s]+/, '').trim()
+      return this.reply({
+        text: `I could not get enough out of these messages to summarise them${detail ? `: ${detail}` : '.'}`,
+        messages: analysed,
+        result,
+        kind: 'insufficient',
+        disclosure,
+        mailSources: citedMailSources('', bundle.excerpts)
+      })
+    }
+
+    return this.reply({
+      text: `${analysisLead(selection, analysed.length)}\n\n${text}`,
+      messages: analysed,
+      result,
+      kind: 'answer',
+      disclosure,
+      mailSources: citedMailSources(text, bundle.excerpts)
     })
   }
 
@@ -490,6 +709,24 @@ export class MailCapability {
     if (input.mailSources) reply.mailSources = input.mailSources
     return reply
   }
+}
+
+/**
+ * The one factual line above an analysis.
+ *
+ * States what was analysed and what was left out, so a shortlist is never
+ * mistaken for the whole picture.
+ */
+function analysisLead(selection: AnalysisSelection, analysed: number): string {
+  const subject = analysed === 1 ? 'message' : 'messages'
+  if (selection.attentionOnly) {
+    return selection.poolSize > analysed
+      ? `The ${analysed} most pressing of ${selection.poolSize} messages that need your attention.`
+      : `${analysed} ${subject} ${analysed === 1 ? 'needs' : 'need'} your attention.`
+  }
+  return selection.poolSize > analysed
+    ? `The ${analysed} most pressing of ${selection.poolSize} recent messages.`
+    : `${analysed} recent ${subject}.`
 }
 
 function notice(text: string): JarvisReply {

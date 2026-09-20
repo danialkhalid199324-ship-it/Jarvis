@@ -271,6 +271,64 @@ export function HomePage({
   )
 }
 
+/**
+ * How many message cards a plain retrieval renders before it stops.
+ *
+ * A list answer *is* its cards, so the bound is generous — but forty cards in a
+ * chat transcript is not a list, it is a wall, and the user loses the answer
+ * they were reading. What is hidden is always stated.
+ */
+const RETRIEVAL_CARD_LIMIT = 12
+
+/**
+ * How many cards sit under a written answer.
+ *
+ * An analysis or a brief *is* the prose; the cards are the evidence behind it.
+ * The core already bounds what it analyses, and every message here has a
+ * paragraph written about it, so this only guards against a future caller
+ * attaching more than it explained.
+ */
+const SUPPORTING_CARD_LIMIT = 10
+
+function MessageSection({
+  messages,
+  shape
+}: {
+  messages: NonNullable<JarvisReply['messages']>
+  shape: JarvisReply['shape']
+}): React.JSX.Element {
+  const written = shape === 'analyse' || shape === 'brief'
+  const limit = written ? SUPPORTING_CARD_LIMIT : RETRIEVAL_CARD_LIMIT
+  const shown = messages.slice(0, limit)
+  const hidden = messages.length - shown.length
+
+  return (
+    <>
+      <div className="section-label">
+        {written
+          ? hidden > 0
+            ? `The ${shown.length} messages behind this, of ${messages.length}`
+            : shown.length === 1
+              ? 'The message behind this'
+              : 'The messages behind this'
+          : hidden > 0
+            ? `Showing ${shown.length} of ${messages.length} messages`
+            : `${shown.length} ${shown.length === 1 ? 'message' : 'messages'}`}
+      </div>
+      <div className="results">
+        {shown.map((message) => (
+          <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
+        ))}
+      </div>
+      {hidden > 0 ? (
+        <div className="suggestions">
+          <div>· {hidden} more not shown here — open Messages to see the full list.</div>
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 function ReplyBody({
   reply,
   onOpen,
@@ -369,16 +427,7 @@ function ReplyBody({
       ) : null}
 
       {reply.messages && reply.messages.length > 0 ? (
-        <>
-          <div className="section-label">
-            {reply.messages.length} {reply.messages.length === 1 ? 'message' : 'messages'}
-          </div>
-          <div className="results">
-            {reply.messages.map((message) => (
-              <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
-            ))}
-          </div>
-        </>
+        <MessageSection messages={reply.messages} shape={reply.shape} />
       ) : null}
 
       {reply.results.length > 0 ? (

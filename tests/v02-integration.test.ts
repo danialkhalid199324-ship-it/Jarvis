@@ -398,7 +398,7 @@ describe('AI model selection is respected everywhere', () => {
       { match: '/me/messages', body: { value: [graphMessage()] } }
     ])
     const { mail, provider: p } = await jarvis(t, mock, { model: 'claude-sonnet-5' })
-    await mail.handle('What happened?', { capability: 'mail', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
+    await mail.handle('What happened?', { capability: 'mail', shape: 'retrieve', mailIntent: 'answer', searchTerms: 'x', reason: 't' })
     assert.ok(p.calls.length > 0)
     assert.ok(p.calls.every((c) => c.model === 'claude-sonnet-5'), 'must use the selected model')
   })

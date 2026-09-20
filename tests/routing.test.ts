@@ -70,8 +70,11 @@ describe('mail routing', () => {
   test('recognises the brief\'s mail examples', () => {
     assert.equal(route('What important emails need my attention?').mailIntent, 'attention')
     assert.equal(route('What emails need a reply?').mailIntent, 'attention')
-    assert.equal(route('Summarise my unread emails.').mailIntent, 'answer')
+    // "Summarise" is an analytical instruction, so it now reaches the
+    // synthesis path rather than the unread list.
     assert.equal(route('Summarise my unread emails.').capability, 'mail')
+    assert.equal(route('Summarise my unread emails.').mailIntent, 'analyse')
+    assert.equal(route('Summarise my unread emails.').shape, 'analyse')
     assert.equal(route('Any emails from Sarah?').mailIntent, 'search')
     assert.equal(route('What happened with the Bluebird invoice?').capability, 'documents')
   })

@@ -319,6 +319,16 @@ export interface DashboardSummary {
 // Assistant replies
 // ---------------------------------------------------------------------------
 
+/**
+ * What *kind of answer* was produced, independent of where the data came from.
+ *
+ * `retrieve` is a list of items and nothing else. `analyse` is a written
+ * reading of a bounded shortlist. `brief` pulls the day together across mail
+ * and calendar. The router decides this from the question; the renderer uses it
+ * to decide how much to show.
+ */
+export type ReplyShape = 'retrieve' | 'analyse' | 'brief'
+
 /** A cited email, the mail equivalent of `SourceReference`. */
 export interface MailSourceReference {
   messageId: string
@@ -339,6 +349,15 @@ export interface MailSourceReference {
 export interface JarvisReply extends AssistantReply {
   /** Which capability answered. Absent means the V0.1 document assistant. */
   capability?: 'documents' | 'mail' | 'calendar' | 'brief'
+  /**
+   * What kind of answer this is, so the UI knows what to lead with.
+   *
+   * A retrieval reply *is* its list of cards. An analysis or a brief is the
+   * written answer, and the cards underneath it are supporting evidence — so
+   * the renderer bounds them rather than printing forty of them under three
+   * paragraphs of synthesis.
+   */
+  shape?: ReplyShape
   /** Emails the answer was grounded in. */
   mailSources?: MailSourceReference[]
   /** Messages to render as cards. */

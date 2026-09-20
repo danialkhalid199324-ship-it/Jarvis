@@ -11,11 +11,30 @@
  * every phrasing that worked before still reaches exactly the same code.
  */
 
+import type { ReplyShape } from '../../shared/communication'
+
 export type Capability = 'documents' | 'mail' | 'calendar' | 'brief'
+
+/**
+ * What *kind of answer* the user wants, independent of which data it comes
+ * from. Capability answers "which source"; shape answers "what output".
+ *
+ * This exists because "show me emails that need attention" and "summarise the
+ * five most important emails that need my attention" name the same data and
+ * want completely different things — a list of cards versus a written
+ * analysis. Classifying only by topic words made the second silently become
+ * the first.
+ *
+ * Shared with the renderer, which uses the same three values to decide whether
+ * a reply leads with its cards or with its prose.
+ */
+export type RequestShape = ReplyShape
 
 export type MailIntent =
   /** "Check my emails" — list recent. */
   | 'list'
+  /** "Summarise the 5 most important…" — rank, then synthesise. */
+  | 'analyse'
   /** "Summarise my unread emails". */
   | 'unread'
   /** "What needs my attention?" / "What needs a reply?" */
@@ -40,6 +59,10 @@ export type CalendarIntent =
 
 export interface Route {
   capability: Capability
+  /** What kind of answer to produce. */
+  shape: RequestShape
+  /** How many items the user asked for, when they said. */
+  count?: number
   mailIntent?: MailIntent
   calendarIntent?: CalendarIntent
   /** An account named in the question, e.g. "GTA" from "check my GTA emails". */
@@ -87,13 +110,125 @@ const MEETING_CONTEXT =
 const DOCUMENT_STRONG =
   /\b(files?|documents?|folders?|pdfs?|docx?|spreadsheets?|on my (mac|computer|disk|drive)|locally)\b/i
 
-const BRIEF = /\b(daily brief|morning brief|evening brief|brief me|my brief|what'?s my day|brief for today)\b/i
+/**
+ * A request for the day pulled together. Covers the "-ing" forms, which the
+ * first version missed entirely — "give me my daily briefing" fell through to
+ * local file search.
+ */
+const BRIEF =
+  /\b(daily brief\w*|morning brief\w*|evening brief\w*|exec(?:utive)? brief\w*|brief me|my brief\w*|brief for today|what'?s my day|how does my day look|catch me up on (?:my )?(?:day|morning)|run me through my day|start of day)\b/i
+
+/**
+ * "What needs my attention today?" with no source named is a request for the
+ * whole picture, not for the mail screen. Naming a source keeps it specific.
+ */
+const BRIEF_WHOLE_DAY =
+  /\bwhat (?:needs|requires) my attention (?:today|this morning|right now)\b/i
+const NAMES_A_SOURCE = /\b(e-?mails?|inbox|messages?|mail|calendars?|meetings?|files?|documents?)\b/i
+
+/**
+ * One question spanning both mail and calendar.
+ *
+ * "Tell me what emails need my attention and what meetings I have today" is a
+ * brief, not two requests — and routing it by capability score meant whichever
+ * vocabulary scored higher answered and the other half was silently dropped.
+ * Only a *question* qualifies: an instruction that names both ("email Sarah
+ * about moving the 3pm") is work, and belongs to the capability that does it.
+ */
+const JOINS_TWO_ASKS = /\b(and|plus|also|as well as|along with)\b/i
+const MAIL_NOUN = /\b(e-?mails?|inbox|mailbox|mail|messages?)\b/i
+const CALENDAR_NOUN = /\b(calendars?|meetings?|appointments?|diary|agenda|schedule)\b/i
+const ACTION_INSTRUCTION =
+  /\b(draft|write|compose|send|reply|respond|book|schedule|reschedul\w*|move|shift|cancel|create|add|put|set up|arrange|organis[ez]e)\b/i
+
+function spansMailAndCalendar(question: string): boolean {
+  return (
+    MAIL_NOUN.test(question) &&
+    CALENDAR_NOUN.test(question) &&
+    JOINS_TWO_ASKS.test(question) &&
+    !ACTION_INSTRUCTION.test(question)
+  )
+}
+
+/**
+ * Verbs and instructions that ask Jarvis to *think*, not to fetch.
+ *
+ * Checked before any topic vocabulary, because "summarise" tells you what the
+ * user wants done and "attention" only tells you what it is about.
+ */
+const ANALYTICAL =
+  /\b(summaris\w*|summariz\w*|analys\w*|analyz\w*|prioritis\w*|prioritiz\w*|triage|synthesis\w*|break (?:it |them )?down|walk me through|talk me through|give me a rundown|rundown|overview of|tell me what (?:they|it|he|she) (?:want|need)|what do they want|what action|what should i do|what do i need to do|who (?:is|are) (?:it|they) from|explain|make sense of|what matters)\b/i
+
+/** Word forms of small numbers, which people use more than digits. */
+const COUNT_WORDS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, couple: 2, few: 3, several: 4
+}
+
+/** Upper bound on anything the user asks for, so one word cannot cost a fortune. */
+export const MAX_REQUESTED_COUNT = 15
+
+/**
+ * How many items the user asked for.
+ *
+ * Handles "top 5", "5 most important", "top three", "a couple", "first 3".
+ * Returns null when no number was given, so callers can apply their own
+ * default rather than guessing one here.
+ */
+export function parseRequestedCount(question: string): number | null {
+  const numberWord = Object.keys(COUNT_WORDS).join('|')
+
+  const patterns = [
+    new RegExp(`\\b(?:top|first|best|main|key)\\s+(\\d+|${numberWord})\\b`, 'i'),
+    new RegExp(`\\b(\\d+|${numberWord})\\s+(?:most|biggest|highest|main|key)\\b`, 'i'),
+    new RegExp(`\\ba\\s+(couple|few)\\b`, 'i'),
+    // "summarise 5 emails", "give me 3 of them"
+    new RegExp(`\\b(\\d+|${numberWord})\\s+(?:e-?mails?|messages?|items?|things?|of them)\\b`, 'i')
+  ]
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(question)
+    const token = match?.[1]?.toLowerCase()
+    if (!token) continue
+    const value = /^\d+$/.test(token) ? Number.parseInt(token, 10) : COUNT_WORDS[token]
+    if (value && value > 0) return Math.min(value, MAX_REQUESTED_COUNT)
+  }
+
+  return null
+}
+
+/**
+ * Decide the shape of the answer before anything else.
+ *
+ * Order matters: a briefing request wins outright, then an analytical
+ * instruction, and only what remains is plain retrieval.
+ */
+export function detectShape(question: string): RequestShape {
+  if (BRIEF.test(question)) return 'brief'
+  if (BRIEF_WHOLE_DAY.test(question) && !NAMES_A_SOURCE.test(question)) return 'brief'
+  if (spansMailAndCalendar(question)) return 'brief'
+  if (ANALYTICAL.test(question)) return 'analyse'
+  return 'retrieve'
+}
 
 // --- mail sub-intents ------------------------------------------------------
 
 const DRAFT_INTENT = /\b(draft|write|compose|reply to|respond to|answer)\b.*\b(e-?mail|reply|message|back)\b|\b(draft|compose)\b/i
 const ATTENTION_INTENT =
   /\b(need(s|ing)? (my )?(attention|a reply|replying|response)|important|urgent|follow[- ]?up|outstanding|waiting on)/i
+
+/**
+ * Whether the question is about what needs attention, rather than about mail
+ * in general.
+ *
+ * Exported because the analytical path needs the same answer: "summarise the
+ * five most important emails that need my attention" is an analysis, so it no
+ * longer routes to the attention *intent*, but it must still be analysing the
+ * attention-worthy shortlist rather than the whole inbox.
+ */
+export function wantsAttention(question: string): boolean {
+  return ATTENTION_INTENT.test(question)
+}
 const UNREAD_INTENT = /\bunread\b/i
 const SEARCH_INTENT = /\b(find|search|look for|any (e-?mails?|messages?)|from [A-Z]|about)\b/i
 const ANSWER_INTENT =
@@ -137,6 +272,26 @@ function extractSearchTerms(question: string): string | undefined {
   return cleaned.length >= 2 ? cleaned : undefined
 }
 
+/**
+ * A subject the user named outright.
+ *
+ * Analysis questions are long and full of instructions — "for each one tell me
+ * who it is from, what they want, and what action I need to take" — so running
+ * the general term extractor over them produces a nonsense search string that
+ * matches nothing. Only an explicit topic counts here: something quoted, or
+ * something introduced with "about".
+ */
+function extractExplicitTopic(question: string): string | undefined {
+  const quoted = /["“']([^"”']{3,})["”']/.exec(question)
+  if (quoted) return quoted[1]!.trim()
+
+  const afterAbout = /\b(?:about|regarding|concerning)\s+(?:the\s+|my\s+)?([\w'-]+(?:\s+[\w'-]+){0,3})/i.exec(
+    question
+  )
+  const candidate = afterAbout?.[1]?.replace(/[?.!,]+$/, '').trim()
+  return candidate && candidate.length >= 3 ? candidate : undefined
+}
+
 const TIME_WORDS =
   /^(monday|tuesday|wednesday|thursday|friday|saturday|sunday|today|yesterday|tomorrow|last|this|next)$/i
 
@@ -171,8 +326,13 @@ function findAccountHint(question: string, labels: readonly string[]): string | 
   return undefined
 }
 
-function mailIntentFor(question: string): MailIntent {
+function mailIntentFor(question: string, shape: RequestShape): MailIntent {
+  // Drafting is an instruction in its own right and outranks everything.
   if (DRAFT_INTENT.test(question)) return 'draft'
+  // An analytical instruction beats topic vocabulary. "Summarise the five most
+  // important emails that need my attention" is an analysis *of* the
+  // attention-worthy mail, not a request for the attention list.
+  if (shape === 'analyse') return 'analyse'
   if (ATTENTION_INTENT.test(question)) return 'attention'
   if (ANSWER_INTENT.test(question)) return 'answer'
   if (UNREAD_INTENT.test(question)) return 'unread'
@@ -202,9 +362,19 @@ function calendarIntentFor(question: string): CalendarIntent {
  */
 export function routeQuestion(question: string, context: RoutingContext): Route {
   const text = question.trim()
+  const shape = detectShape(text)
+  const count = parseRequestedCount(text)
 
-  if (BRIEF.test(text)) {
-    return { capability: 'brief', reason: 'asked for the daily brief' }
+  // A briefing request wins outright, whatever else it mentions. These are
+  // usually compound — "what emails need my attention and what meetings do I
+  // have" — and the brief is the one capability that spans both.
+  if (shape === 'brief') {
+    return {
+      capability: 'brief',
+      shape,
+      ...(count !== null ? { count } : {}),
+      reason: 'asked for the daily brief'
+    }
   }
 
   let mail = 0
@@ -241,16 +411,22 @@ export function routeQuestion(question: string, context: RoutingContext): Route 
   // Documents wins ties and wins by default. This is deliberate: V0.1 must
   // never lose a question to a capability that was not clearly asked for.
   if (mail >= 3 && mail >= calendar && mail > documents) {
-    const intent = mailIntentFor(text)
+    const intent = mailIntentFor(text, shape)
     const route: Route = {
       capability: 'mail',
+      shape,
       mailIntent: intent,
+      ...(count !== null ? { count } : {}),
       reason: `mail vocabulary (score ${mail})`
     }
     if (accountHint) route.accountHint = accountHint
     if (allAccounts) route.allAccounts = true
     if (intent === 'search' || intent === 'answer') {
       const terms = extractSearchTerms(text)
+      if (terms) route.searchTerms = terms
+    } else if (intent === 'analyse') {
+      // Only a subject the user actually named. See extractExplicitTopic.
+      const terms = extractExplicitTopic(text)
       if (terms) route.searchTerms = terms
     }
     return route
@@ -259,7 +435,9 @@ export function routeQuestion(question: string, context: RoutingContext): Route 
   if (calendar >= 3 && calendar > documents) {
     const route: Route = {
       capability: 'calendar',
+      shape,
       calendarIntent: calendarIntentFor(text),
+      ...(count !== null ? { count } : {}),
       reason: `calendar vocabulary (score ${calendar})`
     }
     if (accountHint) route.accountHint = accountHint
@@ -268,6 +446,8 @@ export function routeQuestion(question: string, context: RoutingContext): Route 
 
   return {
     capability: 'documents',
+    shape,
+    ...(count !== null ? { count } : {}),
     reason:
       documents > 0
         ? 'explicit document vocabulary'
