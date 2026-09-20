@@ -196,6 +196,21 @@ describe('calendar language — titles', () => {
     assert.equal(parseEventTitle('Book a meeting titled "Board Sync" at 2pm'), 'Board Sync')
   })
 
+  test('reads a title after a trailing separator', () => {
+    assert.equal(
+      parseEventTitle('add a meeting today in my calendar starting 7.30pm for an hour - Resource Company Sale'),
+      'Resource Company Sale'
+    )
+    assert.equal(
+      parseEventTitle('Book tomorrow at 9am for 30 minutes – Operations Review'),
+      'Operations Review'
+    )
+    assert.equal(
+      parseEventTitle('Create an appointment Friday at 2pm — Planning with Finance'),
+      'Planning with Finance'
+    )
+  })
+
   test('returns null rather than inventing one', () => {
     assert.equal(parseEventTitle('Book a meeting tomorrow at 2 PM.'), null)
     assert.equal(parseEventTitle('Schedule a meeting for Tuesday at 3 PM.'), null)
@@ -217,6 +232,7 @@ describe('calendar language — whole instructions', () => {
     )
     assert.equal(parsed.startMinutes, 19 * 60 + 30)
     assert.equal(parsed.durationMinutes, 60)
+    assert.equal(parsed.title, 'Resource Company Sale')
   })
   test('the reported duration-change sentence is read correctly', () => {
     const u = parseUpdateInstruction(
@@ -248,6 +264,19 @@ describe('calendar language — whole instructions', () => {
 // ===========================================================================
 
 describe('BUG 1: the title given to a new meeting reaches the approval card', () => {
+  test('the exact live command carries its trailing title to approval', async (t) => {
+    const mock = new GraphMock([{ match: '/me/calendarView', body: { value: [] } }])
+    const { ask } = await calendar(t, mock)
+    const reply = await ask(
+      'add a meeting today in my calendar starting 7.30pm for an hour - Resource Company Sale'
+    )
+
+    assert.ok(reply.pendingAction, 'a create must be proposed')
+    assert.equal(field(reply.pendingAction!, 'Title'), 'Resource Company Sale')
+    assert.equal(field(reply.pendingAction!, 'Length'), '1 hour')
+    assert.doesNotMatch(reply.text, /did not give the meeting a title/i)
+  })
+
   test('"called GTA Management Meeting" is used as the title', async (t) => {
     const mock = new GraphMock([{ match: '/me/calendarView', body: { value: [] } }])
     const { ask } = await calendar(t, mock)

@@ -238,10 +238,12 @@ const WHEN_BOUNDARY =
 const GENERIC_TITLE =
   /^(?:a|an|the|my|new)?\s*(?:new\s+)?(?:meeting|call|appointment|catch[- ]?up|event|entry|reminder|session)s?$/i
 
-function cleanTitle(raw: string): string | null {
+function cleanTitle(raw: string, stopAtWhen = true): string | null {
   let title = raw.trim().replace(/^["'“”']+|["'“”'.,!?]+$/g, '').trim()
-  const boundary = WHEN_BOUNDARY.exec(title)
-  if (boundary) title = title.slice(0, boundary.index).trim()
+  if (stopAtWhen) {
+    const boundary = WHEN_BOUNDARY.exec(title)
+    if (boundary) title = title.slice(0, boundary.index).trim()
+  }
   title = title.replace(/[.,!?]+$/, '').trim()
   if (!title || GENERIC_TITLE.test(title)) return null
   // A lone lowercase word is almost certainly a fragment, not a title.
@@ -256,6 +258,17 @@ function cleanTitle(raw: string): string | null {
  * placeholder the user can see and correct in the approval card.
  */
 export function parseEventTitle(text: string): string | null {
+  // A trailing dash is a common spoken-command separator: all scheduling
+  // details come first, then the title. Requiring whitespace around it avoids
+  // treating a hyphen inside a time, date or title as the separator.
+  const trailing = /\s[-–—]\s+(.+?)\s*$/u.exec(text)
+  if (trailing) {
+    // The complete tail is the title, so words such as "for" and "with" are
+    // content here rather than time boundaries.
+    const title = cleanTitle(trailing[1]!, false)
+    if (title) return title
+  }
+
   // Quoted text is taken literally — the user was explicit.
   const quoted = /["“']([^"”']{2,})["”']/.exec(text)
   if (quoted) {
