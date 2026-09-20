@@ -1,3 +1,5 @@
+import type { MailExcerpt } from '../../communication/mail-context'
+import { EVIDENCE_RULES } from '../../communication/evidence'
 import type { ScoredMailMessage } from '../../../shared/communication'
 import {
   categoriseReasons,
@@ -70,27 +72,29 @@ export const ANALYSIS_CONTEXT_CHARS = 16_000
  */
 export const MAIL_ANALYSIS_SYSTEM = `You are Jarvis, a private executive assistant triaging the user's own email.
 
-You will be given numbered excerpts from emails that Jarvis has already retrieved, grouped and ranked. Follow these rules exactly.
+${EVIDENCE_RULES}
 
-1. Work ONLY from the excerpts. Never use outside knowledge about companies, people or events. Never invent a deadline, an amount, a name, a request or a degree of urgency that is not in the text.
-2. You will be told which excerpts belong to the same matter. Write ONE block per matter, in the order given — never one block per excerpt. Where a matter has several excerpts, analyse them together, and say plainly that more than one message exists about it, including any way they differ from each other.
+The emails below are grouped under MATTER headings. Jarvis decided that grouping; it is not yours to revisit.
+
+1. Write exactly one block per MATTER heading, in the order the headings appear. A matter containing three excerpts is ONE block, not three. Never split a matter, never merge two, never add or drop one.
+2. Work ONLY from the excerpts. Never use outside knowledge about companies, people or events. Never invent a date, a figure, a name, a request or a degree of urgency that is not in the text.
 3. Write each block in this form, one item per line:
 
-**<the subject, or the issue in a few words>** [excerpt numbers]
+**<the subject, or the issue in a few words>** [excerpt numbers in this matter]
 From: <sender name, or the address if no name is given>
-What they want: <the key issue, one or two sentences>
-Action required: <what the user has to do, concretely>
-Deadline: <only if an email states a date, day or timeframe>
-Amount: <only if an email states a figure>
+What the emails say: <the key issue, one or two sentences, attributed>
+What they are asking for: <what the sender wants from the user>
+Next step: <what the user should do, inside the evidence boundary above>
+Date stated: <only if an email states a date, day or timeframe — say which email states it>
+Amount stated: <only if an email states a figure — say which email states it>
 Why it matters: <one sentence, grounded in what the emails say>
 
-4. Omit the Deadline line entirely when no deadline is stated, and the Amount line entirely when no figure is stated. Never write "not specified", "unknown", "N/A" or similar — a missing line is correct, a placeholder is not.
-5. Report what the emails SAY, never a state of the world you cannot see. You can read the user's mail. You cannot see their bank, their accounting system, their records, their filing, or anyone else's inbox. So you must never assert that money is still owed, that a bill is unpaid, that a task was not done, that a deadline was missed, or that anything remains outstanding — the email is evidence of what was sent, not of what is true now.
-6. Therefore, for anything financial, the action is to review the invoice, confirm its payment status against the user's own records, reconcile it, and arrange payment only if it turns out to still be outstanding. Write "the invoice states an amount due of X — confirm whether it has already been paid" rather than "pay the outstanding amount". Apply the same care to deadlines and compliance: "confirm this was submitted", not "you have not submitted this".
-7. If an email asks for nothing, write "Action required: None — for information only."
-8. Finish with one short line saying what to deal with first and why.
-9. No greeting, no sign-off, no preamble, no restating of these instructions.
-10. If none of the excerpts actually needs action, say so plainly in one sentence instead of manufacturing urgency.`
+4. Omit the "Date stated" line entirely when no date is stated, and the "Amount stated" line entirely when no figure is stated. Never write "not specified", "unknown", "N/A" or similar — a missing line is correct, a placeholder is not.
+5. Where a matter holds more than one excerpt, say so in the block and spell out any way they disagree — different figures, different dates, a later notice contradicting an earlier one. That disagreement is usually the most useful thing you can tell the user.
+6. If an email asks for nothing, write "What they are asking for: Nothing — for information only."
+7. Finish with one short line saying what to look at first and why.
+8. No greeting, no sign-off, no preamble, no restating of these instructions.
+9. If none of the excerpts needs anything from the user, say so plainly in one sentence instead of manufacturing urgency.`
 
 /**
  * One thing the user has to deal with, and every message about it.
@@ -133,16 +137,53 @@ export interface AnalysisSelection {
 // ---------------------------------------------------------------------------
 
 /**
- * A reference code in a subject line.
+ * A reference code, wherever it appears.
  *
  * Generic by construction: letters followed by a run of digits, or a digit run
  * explicitly introduced as a number or reference. That covers invoice numbers,
  * ticket ids, case numbers, purchase orders and claim references without this
  * module knowing what any of them are. A bare year or a plain figure does not
- * match, which is what keeps "due 30 September 2026" from becoming a key.
+ * match, which keeps "due 30 September 2026" from becoming a key.
  */
 const REFERENCE =
-  /\b([A-Z]{2,6}[-_/ ]?\d{3,}(?:[-_/]\d+)?)\b|(?:#|\bno\.?\s*|\bref(?:erence)?\.?\s*[:.]?\s*)(\d{4,})\b/i
+  /\b([A-Z]{2,6})[-_/ ]?(\d{3,}(?:[-_/]\d+)?)\b|(?:#|\bno\.?\s*|\bref(?:erence)?\.?\s*[:.]?\s*)(\d{4,})\b/gi
+
+/** How much of a message body to scan for references. */
+const REFERENCE_SCAN_CHARS = 400
+
+/** Most references one message may contribute, so a figure-heavy body cannot merge the inbox. */
+const MAX_REFERENCES = 4
+
+/**
+ * Every reference a message mentions, normalised.
+ *
+ * Two things make this wider than it first appears, and both are deliberate:
+ *
+ *   - It reads the preview as well as the subject. A chasing notice often
+ *     carries a generic subject ("Your account statement") with the number
+ *     only in the body, and grouping on subjects alone silently misses it.
+ *   - A qualified code yields its bare digits too, so "INV-0258" and
+ *     "invoice #0258" meet. The cost is that two unrelated things numbered
+ *     0258 would merge; the benefit is that the same thing written two ways
+ *     stops occupying two of the user's five slots. The merge is always
+ *     visible — a grouped matter says how many messages it holds — so a wrong
+ *     merge is obvious, where a missed one is not.
+ */
+export function referenceTokens(message: ScoredMailMessage): Set<string> {
+  const haystack = `${message.subject}\n${(message.body ?? message.preview ?? '').slice(0, REFERENCE_SCAN_CHARS)}`
+  const tokens = new Set<string>()
+
+  for (const match of haystack.matchAll(REFERENCE)) {
+    if (tokens.size >= MAX_REFERENCES) break
+    const digits = (match[2] ?? match[3] ?? '').replace(/[-_/\s]/g, '')
+    if (!digits) continue
+    const prefix = match[1]?.toUpperCase()
+    if (prefix) tokens.add(`${prefix}${digits}`)
+    if (digits.length >= 4) tokens.add(digits)
+  }
+
+  return tokens
+}
 
 /** Prefixes people put in front of a subject when chasing the same thing. */
 const SUBJECT_PREFIX =
@@ -170,78 +211,118 @@ function domainOf(address: string | undefined): string {
 }
 
 /**
- * What makes two messages the same matter.
+ * The key for a message that mentions no reference code.
  *
- * In order of confidence:
- *
- *   1. A reference code shared between subjects. Two notices about the same
- *      numbered thing are the same thing, even when they arrive as separate
- *      threads from different addresses — which is exactly the case where
- *      counting them separately does the most damage, because conflicting
- *      notices about one reference are a problem the user needs told about.
- *   2. The same distinctive subject, stripped of chasing prefixes. Three or
+ *   1. The same distinctive subject, stripped of chasing prefixes. Three or
  *      more words of agreement is a strong signal, and it deliberately ignores
  *      the sender: the original and the chaser often come from different
- *      addresses at the same organisation, or from different people entirely.
- *   3. The conversation Microsoft itself threaded them into.
- *   4. A short subject, qualified by the sender's domain — "Update" from two
+ *      addresses at the same organisation.
+ *   2. The conversation Microsoft itself threaded them into.
+ *   3. A short subject, qualified by the sender's domain — "Update" from two
  *      people is two matters, not one.
  *
  * Subject beats conversation, not the other way round: Graph gives every
- * message a conversation id, so checking that first would make every other
- * rule below it unreachable and leave a re-sent notice counted twice.
- *
- * A message matching none of these is its own matter. Nothing here knows what
- * an invoice, a business or a sender is.
+ * message a conversation id, so checking that first would make every rule
+ * below it unreachable and leave a re-sent notice counted twice.
  */
 export function matterKey(message: ScoredMailMessage): string {
-  const match = REFERENCE.exec(message.subject)
-  const reference = (match?.[1] ?? match?.[2])?.replace(/[-_/\s]/g, '').toUpperCase()
-  if (reference) return `ref:${reference}`
-
   const subject = normaliseSubject(message.subject)
   const words = subject ? subject.split(' ').length : 0
   if (words >= 3 && subject.length >= 12) return `subj:${subject}`
-
   if (message.conversationId) return `conv:${message.accountId}:${message.conversationId}`
-
   if (words >= 2) return `subj:${subject}|${domainOf(message.from?.address)}`
-
   return `msg:${message.accountId}:${message.id}`
 }
 
 /**
  * Collapse messages into the matters they are about.
  *
- * Input order is preserved as rank order: the caller ranks first, so the first
- * message seen for a key becomes that matter's primary, and matters come back
- * in the order their most pressing message did.
+ * Grouping is transitive, which a single key per message cannot express: a
+ * notice carrying "INV-0258", a statement carrying "#0258", and a reply in the
+ * first one's thread are all one matter, but no single key joins all three. So
+ * messages are merged pairwise on any shared evidence — a reference in common,
+ * or the same fallback key — and the connected sets become the matters.
+ *
+ * A message that mentions a reference is joined on references and its thread
+ * only, never on its subject: two invoices from one supplier may well share the
+ * words "Monthly invoice", and merging those would be worse than not grouping
+ * at all.
+ *
+ * Input order is rank order — the caller ranks first — so the first message
+ * seen in a set becomes its primary, and matters come back in the order their
+ * most pressing message did.
  */
 export function groupIntoMatters(messages: readonly ScoredMailMessage[]): MailMatter[] {
-  const byKey = new Map<string, MailMatter>()
+  const ranked = rankByAttention(messages)
+  const parent = ranked.map((_, i) => i)
 
-  for (const message of rankByAttention(messages)) {
-    const key = matterKey(message)
-    const existing = byKey.get(key)
+  const find = (i: number): number => {
+    let root = i
+    while (parent[root] !== root) root = parent[root]!
+    // Path compression keeps this linear over a long inbox.
+    let walk = i
+    while (parent[walk] !== root) {
+      const next = parent[walk]!
+      parent[walk] = root
+      walk = next
+    }
+    return root
+  }
+  const union = (a: number, b: number): void => {
+    const rootA = find(a)
+    const rootB = find(b)
+    // The lower index wins, so the most pressing message stays the primary.
+    if (rootA !== rootB) parent[Math.max(rootA, rootB)] = Math.min(rootA, rootB)
+  }
+
+  const firstByToken = new Map<string, number>()
+  const firstByKey = new Map<string, number>()
+
+  ranked.forEach((message, index) => {
+    const tokens = referenceTokens(message)
+    for (const token of tokens) {
+      const seen = firstByToken.get(`ref:${token}`)
+      if (seen === undefined) firstByToken.set(`ref:${token}`, index)
+      else union(seen, index)
+    }
+
+    // With a reference in hand, only the thread may add to it. Without one,
+    // the subject and conversation rules apply.
+    const key =
+      tokens.size > 0
+        ? message.conversationId
+          ? `conv:${message.accountId}:${message.conversationId}`
+          : `msg:${message.accountId}:${message.id}`
+        : matterKey(message)
+
+    const seen = firstByKey.get(key)
+    if (seen === undefined) firstByKey.set(key, index)
+    else union(seen, index)
+  })
+
+  const byRoot = new Map<number, MailMatter>()
+  ranked.forEach((message, index) => {
+    const root = find(index)
+    const existing = byRoot.get(root)
     if (existing) {
       existing.related.push(message)
       existing.messages.push(message)
       for (const category of categoriseReasons(message.attention.reasons)) {
         if (!existing.categories.includes(category)) existing.categories.push(category)
       }
-      continue
+      return
     }
-    byKey.set(key, {
-      key,
+    byRoot.set(root, {
+      key: `matter:${root}`,
       primary: message,
       related: [],
       messages: [message],
       score: message.attention.score,
       categories: categoriseReasons(message.attention.reasons)
     })
-  }
+  })
 
-  return [...byKey.values()]
+  return [...byRoot.values()]
 }
 
 // ---------------------------------------------------------------------------
@@ -396,31 +477,79 @@ export function knowledgeCaveat(matters: readonly MailMatter[]): string | null {
 // ---------------------------------------------------------------------------
 
 /**
- * The instruction sent alongside the excerpts.
+ * Render the excerpts as matters rather than as a flat list.
  *
- * The user's own words are included so a specific request ("tell me who it is
- * from and what action I need to take") is honoured, but the grouping and the
- * count are restated from the deterministic selection rather than inferred from
- * the question — the model is told what Jarvis decided, not asked to decide it.
+ * This is the whole point. The first version sent a flat numbered list and a
+ * sentence asking the model to treat two of them as one; live, it wrote one
+ * block per excerpt and the user's "five most important" came back as four
+ * matters padded to five entries. A deterministic decision expressed only as a
+ * request to a model is not a decision.
+ *
+ * So the grouping is in the shape of the payload. The model never sees a flat
+ * list it could split along, and "one block per MATTER heading" is something it
+ * can follow mechanically.
  */
-export function analysisInstruction(question: string, groups: readonly (readonly number[])[]): string {
-  const lines = groups.map(
-    (numbers, i) =>
-      `- Matter ${i + 1}: ${numbers.length === 1 ? 'excerpt' : 'excerpts'} ${numbers
-        .map((n) => `[${n}]`)
-        .join(', ')}`
-  )
-  const multiple = groups.filter((g) => g.length > 1).length
+export function renderMatters(
+  matters: readonly { excerpts: readonly MailExcerpt[] }[]
+): string {
+  return matters
+    .map((matter, i) => {
+      const count = matter.excerpts.length
+      const header =
+        `=== MATTER ${i + 1} OF ${matters.length} — ${count} ${count === 1 ? 'message' : 'messages'}` +
+        `${count > 1 ? ', analyse as ONE item' : ''} ===`
+      const body = matter.excerpts.map((e) => `[${e.number}]\n${e.text}`).join('\n\n')
+      return `${header}\n\n${body}`
+    })
+    .join('\n\n')
+}
 
+/**
+ * The instruction sent alongside the matters.
+ *
+ * Short on purpose: the structure below it carries the grouping, so this only
+ * has to say how many blocks to write and pass on what the user actually asked.
+ */
+export function analysisInstruction(question: string, matterCount: number): string {
   return [
     `The user asked: ${question}`,
-    `Jarvis grouped the emails below into ${groups.length} ${
-      groups.length === 1 ? 'matter' : 'distinct matters'
-    }, already in priority order. Write one block per matter, in this order:`,
-    lines.join('\n'),
-    multiple > 0
-      ? `${multiple === 1 ? 'One matter has' : `${multiple} matters have`} more than one message. Analyse each such matter as a single item, and say plainly that several messages exist about it and how they differ.`
-      : 'Each matter has one message.',
-    'Use only what the excerpts contain.'
+    `Below are ${matterCount} ${matterCount === 1 ? 'matter' : 'distinct matters'}, in priority order, each under its own MATTER heading. Write exactly ${matterCount} ${matterCount === 1 ? 'block' : 'blocks'} — one per heading, in this order.`,
+    'Use only what the excerpts contain, and stay inside the evidence boundary.'
+  ].join('\n\n')
+}
+
+/**
+ * The answer Jarvis writes itself when the model will not stay inside the
+ * evidence boundary.
+ *
+ * Deliberately plain. It states who wrote, what the subject was, and that the
+ * user should check the current position themselves — every word of which
+ * Jarvis can stand behind without a model. Shown only after a correction round
+ * has already failed, so it is rare, but it means a wrong claim is never the
+ * thing the user reads.
+ */
+export function deterministicAnalysis(
+  matters: readonly { matter: MailMatter; excerpts: readonly MailExcerpt[] }[]
+): string {
+  const blocks = matters.map(({ matter, excerpts }) => {
+    const numbers = excerpts.map((e) => `[${e.number}]`).join(', ')
+    const from =
+      matter.primary.from?.name ?? matter.primary.from?.address ?? 'an unnamed sender'
+    const extra =
+      matter.messages.length > 1
+        ? `\n${matter.messages.length} messages here refer to the same thing, and they may not agree — read them together.`
+        : ''
+    return (
+      `**${matter.primary.subject || '(no subject)'}** ${numbers}\n` +
+      `From: ${from}\n` +
+      `Raised because: ${matter.primary.attention.reasons.join(', ') || 'it scored above the bar'}.` +
+      `${extra}\n` +
+      'Next step: read the messages below and confirm the current position against your own records.'
+    )
+  })
+
+  return [
+    'I could not write a summary I am able to stand behind, so here is what I can state plainly instead.',
+    ...blocks
   ].join('\n\n')
 }

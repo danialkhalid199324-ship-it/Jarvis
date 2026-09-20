@@ -45,6 +45,7 @@ export type MatterCategory =
   | 'decision'
   | 'request'
   | 'operational'
+  | 'security'
   | 'agreement'
   | 'other'
 
@@ -56,6 +57,14 @@ const BULK_THRESHOLD = 2
 
 /** Significance at or above this overrides bulk and automated-sender suppression. */
 const SIGNIFICANCE_OVERRIDE = 4
+
+/**
+ * The least significance a message needs before it can be raised at all.
+ *
+ * Set at the weakest single significance signal, so one genuine business
+ * marker is enough and no amount of engagement substitutes for it.
+ */
+const SIGNIFICANCE_FLOOR = 2
 
 /** Signals that a message is genuinely someone's business problem. */
 const SIGNIFICANCE_PATTERNS: Array<{
@@ -101,6 +110,12 @@ const SIGNIFICANCE_PATTERNS: Array<{
     // Urgency is a volume control, not a kind of problem: an urgent invoice is
     // still a financial matter. It deliberately carries no category of its own.
     category: 'other'
+  },
+  {
+    pattern: /\b(security alert|suspicious (?:sign[- ]?in|activity|login|transaction)|unauthoris\w+ access|unrecognis\w+ device|password (?:reset|expir\w+|change)|multi[- ]?factor|\bmfa\b|two[- ]factor|verify your identity|account (?:locked|suspended|compromised|recovery))\b/i,
+    points: 4,
+    reason: 'security or account alert',
+    category: 'security'
   },
   {
     pattern: /\b(complaint|dispute|cancellation|termination|outage|failure)\b/i,
@@ -166,12 +181,43 @@ const BULK_PATTERNS: Array<{ pattern: RegExp; points: number }> = [
     pattern: /\b(\d+% off|sale (?:ends|now)|special offer|limited time|deal of the|discount code|free shipping|shop now|buy now)\b/i,
     points: 3
   },
-  { pattern: /\b(newsletter|webinar|round[- ]?up|digest|bulletin)\b/i, points: 2 },
+  {
+    // Product launches and retail announcements, which carry none of the
+    // classic mailing vocabulary: "<product name> | OUT NOW" has no
+    // unsubscribe line, no discount and no survey.
+    pattern: /\b(out now|now available|new arrival|just landed|just dropped|pre[- ]?order|in stock|back in stock|launch(?:ing)? (?:today|now)|introducing (?:the|our)|meet the new|coming soon|new season|latest range)\b/i,
+    points: 3
+  },
+  {
+    pattern: /\b(newsletter|webinar|round[- ]?up|digest|bulletin)\b/i,
+    points: 2
+  },
+  {
+    pattern: /\b(deal|offer|promo\w*|clearance|bundle|gift card|rewards?|loyalty|exclusive (?:offer|access|preview)|members? (?:get|save|only)|save \$?\d+|from \$\d+|\$\d+ off)\b/i,
+    points: 2
+  },
   {
     pattern: /\b(you have \d+ new|new (?:connection|follower|notification)s?|someone (?:viewed|liked|commented)|don'?t miss|spare (?:a few|\d+) minutes?)\b/i,
     points: 2
   }
 ]
+
+/**
+ * Subjects written like an advertisement rather than a message.
+ *
+ * Two signals, both about form rather than words, so they hold for a product,
+ * a service or a campaign in any industry: shouting, and the pipe-and-bullet
+ * styling that marketing tools put between a product and its slogan. Neither
+ * is conclusive alone, which is why each is worth less than the threshold.
+ */
+function campaignStyling(subject: string): number {
+  let points = 0
+  const shouted = subject.match(/\b[A-Z][A-Z0-9]{2,}\b/g) ?? []
+  // Two or more shouted words, and not merely an acronym in a normal sentence.
+  if (shouted.length >= 2 && shouted.join('').length >= 6) points += 2
+  if (/[|•·★☆➤»]|\p{Extended_Pictographic}/u.test(subject)) points += 1
+  return points
+}
 
 const BULK_SENDER =
   /(\bno-?reply|\bdo-?not-?reply|\bnoreply|\bnotifications?\b|\bnewsletters?\b|\bmarketing\b|\bmailer\b|\bcampaign\b|\bupdates?@|\bnews@|\bpromo|\binfo@)/i
@@ -205,6 +251,7 @@ export function assessAttention(
   for (const { pattern, points } of BULK_PATTERNS) {
     if (pattern.test(text)) bulk += points
   }
+  bulk += campaignStyling(message.subject)
   const looksAutomated = BULK_SENDER.test(fromAddress) || BULK_SENDER.test(fromName)
   if (looksAutomated) bulk += 1
 
@@ -220,6 +267,16 @@ export function assessAttention(
   if (message.isFlagged) {
     significance += 4
     reasons.push('flagged by you')
+  }
+
+  // A named human asking a direct question is a business matter even when it
+  // uses none of the vocabulary above: "Can we move Thursday?" is work. It is
+  // deliberately narrow — a person, not a system, and an actual question — so
+  // that a campaign cannot reach it by putting a question mark in a subject.
+  const fromPerson = !BULK_SENDER.test(fromAddress) && !BULK_SENDER.test(fromName) && /\s/.test(fromName.trim())
+  if (fromPerson && /\?/.test(text) && bulk === 0) {
+    significance += 2
+    reasons.push('a person asked you something directly')
   }
 
   // -- engagement --------------------------------------------------------
@@ -283,10 +340,26 @@ export function assessAttention(
   if (unimportantAutomation) score -= 3
   if (isBulk) score -= 10
 
+  // The rule that decides what "needs attention" means.
+  //
+  // Engagement alone used to be enough: unread (2) plus addressed to you (2)
+  // plus sole recipient (1) is 5, comfortably over the bar, so every unread
+  // message addressed to the user qualified — forty messages in, thirty-three
+  // "needed attention", and a product launch sat among the compliance
+  // deadlines. Those three facts describe how a message was *sent*, and a
+  // marketing tool satisfies all of them by design.
+  //
+  // So attention now requires a reason the message is the user's problem:
+  // either something significant in what it says, or the user's own flag,
+  // which is the one signal a sender cannot manufacture. Engagement still
+  // orders the list; it no longer admits anything to it.
+  const significant = significance >= SIGNIFICANCE_FLOOR || message.isFlagged
+
   return {
-    // Three things are never raised however they score: mail the user sent,
-    // mail suppressed as a mailing, and anything below the bar.
-    needsAttention: !sentByUser && !isBulk && score >= ATTENTION_THRESHOLD,
+    // Four things are never raised however they score: mail the user sent,
+    // mail suppressed as a mailing, anything with no significant content, and
+    // anything below the bar.
+    needsAttention: !sentByUser && !isBulk && significant && score >= ATTENTION_THRESHOLD,
     score,
     reasons
   }

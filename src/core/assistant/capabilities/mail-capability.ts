@@ -21,11 +21,15 @@ import {
   ANALYSIS_CONTEXT_CHARS,
   MAIL_ANALYSIS_SYSTEM,
   analysisInstruction,
+  deterministicAnalysis,
   knowledgeCaveat,
+  renderMatters,
   selectForAnalysis,
   type AnalysisSelection,
   type MailMatter
 } from './mail-analysis'
+import { correctionInstruction, findUnsupportedClaims } from '../../communication/evidence'
+import type { MailExcerpt } from '../../communication/mail-context'
 import type {
   JarvisReply,
   MailMessage,
@@ -357,18 +361,17 @@ export class MailCapability {
     // cut one, it is not presented as analysed. A matter whose every message
     // was cut is dropped from the grouping too, so the instruction can never
     // point at an excerpt number that is not there.
-    const numberByMessage = new Map(bundle.excerpts.map((e) => [e.messageId, e.number]))
-    const groups: number[][] = []
-    const analysedMatters: MailMatter[] = []
+    const excerptByMessage = new Map(bundle.excerpts.map((e) => [e.messageId, e]))
+    const grouped: Array<{ matter: MailMatter; excerpts: MailExcerpt[] }> = []
     for (const matter of selection.matters) {
-      const numbers = matter.messages
-        .map((m) => numberByMessage.get(m.id))
-        .filter((n): n is number => n !== undefined)
-      if (numbers.length === 0) continue
-      groups.push(numbers)
-      analysedMatters.push(matter)
+      const excerpts = matter.messages
+        .map((m) => excerptByMessage.get(m.id))
+        .filter((e): e is MailExcerpt => e !== undefined)
+      if (excerpts.length === 0) continue
+      grouped.push({ matter, excerpts })
     }
-    const analysed = selection.candidates.filter((m) => numberByMessage.has(m.id))
+    const analysedMatters = grouped.map((g) => g.matter)
+    const analysed = selection.candidates.filter((m) => excerptByMessage.has(m.id))
 
     const model = this.deps.providers.activeModelId
     const disclosure = mailDisclosure(
@@ -387,25 +390,18 @@ export class MailCapability {
       accounts: bundle.accountLabels
     })
 
+    const prompt = `${analysisInstruction(question, grouped.length)}\n\n${renderMatters(grouped)}`
+
     let text: string
     try {
-      const response = await provider.complete(
-        {
-          system: MAIL_ANALYSIS_SYSTEM,
-          maxTokens: 2500,
-          messages: [
-            {
-              role: 'user',
-              content: `${analysisInstruction(question, groups)}\n\n${renderMailExcerpts(
-                bundle.excerpts
-              )}`
-            }
-          ],
-          ...(signal ? { signal } : {})
-        },
-        model
+      text = await this.writeWithinEvidence(
+        provider,
+        model,
+        MAIL_ANALYSIS_SYSTEM,
+        prompt,
+        () => deterministicAnalysis(grouped),
+        signal
       )
-      text = response.text.trim()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logger.error('mail.external_call_failed', { providerId: provider.id, error: message })
@@ -494,6 +490,59 @@ export class MailCapability {
     // Fetch bodies only for the handful actually being read.
     const detailed = await this.withBodies(scored.slice(0, 6))
     return this.answerFrom(question, detailed, scored, result, provider, signal)
+  }
+
+  /**
+   * Get prose out of the model that stays inside what Jarvis can see.
+   *
+   * Three steps, in order of preference. Ask. If the answer asserts something
+   * Jarvis has no way to know, quote those sentences back and ask once for a
+   * rewrite. If it does it again, discard the prose and write the plain
+   * factual version instead.
+   *
+   * The correction round is what makes this different from appending a
+   * disclaimer: the user never reads "pay the outstanding amount" followed by
+   * a note explaining that Jarvis cannot know that. They read a sentence that
+   * was correct in the first place, or one Jarvis wrote itself.
+   */
+  private async writeWithinEvidence(
+    provider: AIProvider,
+    model: string,
+    system: string,
+    prompt: string,
+    fallback: () => string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const ask = async (messages: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> => {
+      const response = await provider.complete(
+        { system, maxTokens: 2500, messages, ...(signal ? { signal } : {}) },
+        model
+      )
+      return response.text.trim()
+    }
+
+    const first = await ask([{ role: 'user', content: prompt }])
+    const claims = findUnsupportedClaims(first)
+    if (claims.length === 0) return first
+
+    this.deps.logger.info('mail.evidence_correction', {
+      providerId: provider.id,
+      claimCount: claims.length,
+      // The offending sentences are the user's own mail content, so only the
+      // machine-readable labels are logged.
+      labels: claims.map((c) => c.label)
+    })
+
+    const second = await ask([
+      { role: 'user', content: prompt },
+      { role: 'assistant', content: first },
+      { role: 'user', content: correctionInstruction(claims) }
+    ])
+
+    if (findUnsupportedClaims(second).length === 0) return second
+
+    this.deps.logger.info('mail.evidence_fallback', { providerId: provider.id })
+    return fallback()
   }
 
   /** Load full bodies for a small set, falling back to the preview on failure. */

@@ -4,6 +4,7 @@ import type { DocumentStore } from '../storage/document-store'
 import type { MicrosoftWorkspace } from '../microsoft/workspace'
 import { needingAttention, scoreMessages } from './mail-intelligence'
 import { buildMailExcerpts, mailDisclosure } from './mail-context'
+import { EVIDENCE_RULES, correctionInstruction, findUnsupportedClaims } from './evidence'
 import { formatTime, startOfDay, endOfDay } from './time'
 import type {
   AccountFailure,
@@ -13,17 +14,18 @@ import type {
 
 const BRIEF_SYSTEM = `You are Jarvis, writing the executive summary at the top of a busy operator's daily brief.
 
+${EVIDENCE_RULES}
+
 You will be given the facts of their day: the meetings on their connected calendar, and the emails that scored highest on Jarvis's own objective signals. Follow these rules exactly.
 
-1. Use ONLY the facts given. Never invent a meeting, a sender, a deadline, an amount or a degree of urgency.
-2. Report what you can see, never a state of the world you cannot. You can see the user's connected calendar and mail, and nothing else. No meetings showing means none are on the connected calendar — it does not mean the day is free, clear or open, and you must not say that it is. In the same way, never assert that money is still owed, that a bill is unpaid, that a task was not done or that a deadline was missed: an email is evidence of what was sent, not of what is true now. For anything financial, say to confirm its payment status against the user's own records and arrange payment only if it turns out to still be outstanding.
-3. Open with one or two sentences on the shape of the day — what is on the calendar and the single thing most worth their attention.
-4. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what they want, and what the user has to do. Include a deadline or an amount only when the email states one; leave the point out entirely otherwise, and never write "not specified" or similar.
-5. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, an afternoon with nothing booked. Say nothing if there is nothing to say.
-6. Close with one line naming what to do first.
-7. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
-8. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
-9. No greeting, no sign-off, no headings, no restating of these instructions.`
+1. Use ONLY the facts given. Never invent a meeting, a sender, a date, an amount or a degree of urgency.
+2. Open with one or two sentences on the shape of the day — what is on the connected calendar, and the single thing most worth their attention.
+3. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what the email says they want, and what the user should do about it — inside the evidence boundary above. Include a date or an amount only when an email states one, attributed to that email; leave the point out entirely otherwise, and never write "not specified" or similar.
+4. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, an afternoon with nothing booked on the calendar. Say nothing if there is nothing to say. Never turn an empty calendar into a claim about how much time the user has.
+5. Close with one line naming what to look at first.
+6. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
+7. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
+8. No greeting, no sign-off, no headings, no restating of these instructions.`
 
 export interface BriefDeps {
   workspace: MicrosoftWorkspace
@@ -157,16 +159,47 @@ export class DailyBriefService {
     ].join('\n\n')
 
     try {
-      const response = await provider.complete(
-        {
-          system: BRIEF_SYSTEM,
-          maxTokens: 1500,
-          messages: [{ role: 'user', content: factSheet }],
-          ...(signal ? { signal } : {})
-        },
-        this.deps.providers.activeModelId
-      )
-      brief.focus = response.text.trim() || null
+      const ask = async (
+        messages: Array<{ role: 'user' | 'assistant'; content: string }>
+      ): Promise<string> => {
+        const response = await provider.complete(
+          {
+            system: BRIEF_SYSTEM,
+            maxTokens: 1500,
+            messages,
+            ...(signal ? { signal } : {})
+          },
+          this.deps.providers.activeModelId
+        )
+        return response.text.trim()
+      }
+
+      // The same discipline as the analytical path: ask, check, correct once,
+      // and withhold rather than print a claim Jarvis cannot support. A brief
+      // that says "with the day clear, settle these invoices" is worse than no
+      // brief — the facts above it are still there either way.
+      let focus = await ask([{ role: 'user', content: factSheet }])
+      const claims = findUnsupportedClaims(focus)
+      if (claims.length > 0) {
+        this.deps.logger.info('brief.evidence_correction', {
+          claimCount: claims.length,
+          labels: claims.map((c) => c.label)
+        })
+        focus = await ask([
+          { role: 'user', content: factSheet },
+          { role: 'assistant', content: focus },
+          { role: 'user', content: correctionInstruction(claims) }
+        ])
+      }
+
+      if (findUnsupportedClaims(focus).length > 0) {
+        this.deps.logger.info('brief.evidence_withheld', {})
+        brief.focusUnavailableReason =
+          'I held back the written summary: it kept stating things I cannot check from your mail and calendar alone. The counts and meetings above are what I can actually see.'
+        return brief
+      }
+
+      brief.focus = focus || null
       brief.disclosure = mailDisclosure(
         bundle,
         { id: provider.id, label: provider.label, local: provider.local },
