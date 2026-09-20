@@ -142,13 +142,19 @@ export class MailCapability {
       ...(accountId ? { accountId } : {}),
       limit: 40
     })
-    const flagged = needingAttention(result.items, { ownAddresses: this.ownAddresses() })
+    // Scoring decides *which* messages appear here; the date decides the order
+    // they are read in. Mixing the two made the list jump around in time,
+    // which is hard to scan. Every message keeps its score and reasons — the
+    // badges and the "raised because…" line render from the message itself.
+    const flagged = sortByNewest(
+      needingAttention(result.items, { ownAddresses: this.ownAddresses() })
+    )
 
     const text =
       flagged.length === 0
         ? 'Nothing in your recent mail looks like it needs attention.'
-        : `${flagged.length} ${flagged.length === 1 ? 'message looks' : 'messages look'} like they need attention. ` +
-          `I ranked these on what Microsoft already tells me — unread, flagged, marked important, addressed to you directly — and on what the messages say.`
+        : `${flagged.length} ${flagged.length === 1 ? 'message looks' : 'messages look'} like they need attention, newest first. ` +
+          `I picked these out on what Microsoft already tells me — unread, flagged, marked important, addressed to you directly — and on what the messages say.`
 
     return this.reply({ text, messages: flagged, result, kind: 'results' })
   }

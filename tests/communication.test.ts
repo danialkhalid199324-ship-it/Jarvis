@@ -693,16 +693,100 @@ describe('mail views use the right ordering', () => {
     assert.deepEqual(reply.messages!.map((m) => m.id), ['new-quiet', 'mid', 'old-urgent'])
   })
 
-  test('Needs attention stays ranked by priority, oldest-but-urgent first', async (t) => {
+  test('Needs attention is newest first, while still selecting on priority', async (t) => {
+    // Two qualifying messages: an old urgent one and a newer, milder one that
+    // still clears the threshold. Both must appear; the newer must lead.
+    const mock = new GraphMock([
+      {
+        match: '/me/mailFolders/inbox/messages',
+        body: {
+          value: [
+            graphMessage({
+              id: 'old-urgent',
+              subject: 'URGENT: please confirm the audit date',
+              importance: 'high',
+              flag: { flagStatus: 'flagged' },
+              receivedDateTime: '2026-09-12T08:00:00Z'
+            }),
+            graphMessage({
+              id: 'new-milder',
+              subject: 'Can you review the roster?',
+              receivedDateTime: '2026-09-19T08:00:00Z'
+            }),
+            // Does not qualify — must not appear at all.
+            graphMessage({
+              id: 'newest-newsletter',
+              subject: 'Monthly newsletter — unsubscribe any time',
+              isRead: true,
+              from: { emailAddress: { address: 'no-reply@acme.example' } },
+              receivedDateTime: '2026-09-20T08:00:00Z'
+            })
+          ]
+        }
+      }
+    ])
+    const { mail } = await harness(t, mock)
+    const q = 'What important emails need my attention?'
+    const reply = await mail.handle(q, routeQuestion(q, ctx))
+
+    // Selection is unchanged: both qualify, the newsletter does not.
+    assert.deepEqual(
+      [...reply.messages!.map((m) => m.id)].sort(),
+      ['new-milder', 'old-urgent'],
+      'the same messages must qualify as before'
+    )
+    // Presentation is now chronological.
+    assert.deepEqual(reply.messages!.map((m) => m.id), ['new-milder', 'old-urgent'])
+
+    // The old message really is both older and higher-scoring, so this
+    // genuinely distinguishes the two orderings.
+    const older = reply.messages!.find((m) => m.id === 'old-urgent')!
+    const newer = reply.messages!.find((m) => m.id === 'new-milder')!
+    assert.ok(older.receivedAt < newer.receivedAt, 'fixture must have the urgent one older')
+    assert.ok(older.attention.score > newer.attention.score, 'fixture must have it higher-scoring')
+
+    assert.match(reply.text, /newest first/)
+  })
+
+  test('every attention score, reason and flag survives the reordering', async (t) => {
     const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: inboxPayload }])
     const { mail } = await harness(t, mock)
     const q = 'What important emails need my attention?'
     const reply = await mail.handle(q, routeQuestion(q, ctx))
 
-    assert.equal(reply.messages![0]!.id, 'old-urgent', 'the urgent message must stay on top')
-    // And it is genuinely the oldest, so this is not chronological order.
-    const first = reply.messages![0]!
-    assert.ok(reply.messages!.every((m) => m.receivedAt >= first.receivedAt || m.id === first.id))
+    // Recompute the assessments independently and compare, so nothing about
+    // the metadata can have been lost or rewritten by the sort.
+    const expected = new Map(
+      needingAttention(
+        inboxPayload.value.map((raw) => mapMessage(raw as never, fakeAccount())),
+        { ownAddresses: OWN }
+      ).map((m) => [m.id, m.attention])
+    )
+
+    assert.equal(reply.messages!.length, expected.size, 'the same set must qualify')
+    for (const message of reply.messages!) {
+      assert.deepEqual(message.attention, expected.get(message.id), `${message.id} lost its assessment`)
+      assert.equal(message.attention.needsAttention, true)
+      assert.ok(message.attention.reasons.length > 0, `${message.id} lost its reasons`)
+    }
+
+    // The badge fields the UI renders from are intact on the urgent message.
+    const urgent = reply.messages!.find((m) => m.id === 'old-urgent')!
+    assert.equal(urgent.importance, 'high')
+    assert.equal(urgent.isFlagged, true)
+    assert.equal(urgent.isRead, false)
+    assert.ok(urgent.attention.reasons.includes('marked high importance'))
+    assert.ok(urgent.attention.reasons.includes('flagged by you'))
+  })
+
+  test('the Daily Brief keeps its priority ordering', async (t) => {
+    // needingAttention() itself is untouched, so anything that depends on the
+    // priority ranking — the brief's own list — is unaffected by the view change.
+    const ranked = needingAttention(
+      inboxPayload.value.map((raw) => mapMessage(raw as never, fakeAccount())),
+      { ownAddresses: OWN }
+    )
+    assert.equal(ranked[0]!.id, 'old-urgent', 'priority ranking must still lead with the urgent one')
   })
 
   test('the counts in the Recent summary are unaffected by ordering', async (t) => {
