@@ -449,7 +449,25 @@ select {
   margin-bottom: var(--s-2);
 }
 
+.turn {
+  display: flex;
+  flex-direction: column;
+}
+
+.turn--user {
+  align-items: flex-end;
+}
+
+.turn--user .turn__role {
+  text-align: right;
+}
+
 .turn--user .turn__text {
+  max-width: min(72%, 620px);
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px 12px 3px 12px;
+  background: var(--bg-panel);
   font-size: 16px;
   color: var(--text-primary);
   font-weight: 500;
@@ -457,6 +475,14 @@ select {
 
 .turn--jarvis .turn__role {
   color: var(--accent);
+}
+
+.turn--jarvis {
+  align-items: flex-start;
+}
+
+.turn--jarvis > :not(.turn__role) {
+  width: 100%;
 }
 
 .answer {

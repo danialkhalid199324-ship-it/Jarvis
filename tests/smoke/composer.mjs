@@ -61,6 +61,20 @@ for (let i = 0; i < 4; i++) {
   await page.waitForFunction((n) => document.querySelectorAll('.turn--jarvis').length >= n, i + 1, { timeout: 40000 })
 }
 
+const ownership = await page.evaluate(() => {
+  const inner = document.querySelector('.conversation')?.getBoundingClientRect()
+  const users = [...document.querySelectorAll('.turn--user .turn__text')].map((el) => el.getBoundingClientRect())
+  const jarvis = [...document.querySelectorAll('.turn--jarvis .turn__role')].map((el) => el.getBoundingClientRect())
+  return {
+    userCount: users.length,
+    jarvisCount: jarvis.length,
+    usersRight: Boolean(inner) && users.every((rect) => Math.abs(rect.right - inner.right) < 3 && rect.width < inner.width * 0.8),
+    jarvisLeft: Boolean(inner) && jarvis.every((rect) => Math.abs(rect.left - inner.left) < 3)
+  }
+})
+check('multiple user turns receive the right-side treatment', ownership.userCount === 4 && ownership.usersRight)
+check('multiple Jarvis turns receive the left-side treatment', ownership.jarvisCount === 4 && ownership.jarvisLeft)
+
 const info = await page.$eval('.chat__scroll', (el) => ({ sh: el.scrollHeight, ch: el.clientHeight }))
 check('conversation overflows', info.sh > info.ch + 100, `${info.sh} > ${info.ch}`)
 const after = await box('.chat__composer')

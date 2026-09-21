@@ -295,10 +295,12 @@ const SUPPORTING_CARD_LIMIT = 15
 
 function MessageSection({
   messages,
-  shape
+  shape,
+  mailSources
 }: {
   messages: NonNullable<JarvisReply['messages']>
   shape: JarvisReply['shape']
+  mailSources?: JarvisReply['mailSources']
 }): React.JSX.Element {
   const written = shape === 'analyse' || shape === 'brief'
   const limit = written ? SUPPORTING_CARD_LIMIT : RETRIEVAL_CARD_LIMIT
@@ -324,6 +326,11 @@ function MessageSection({
           <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
         ))}
       </div>
+      {mailSources && mailSources.length > 0 ? (
+        <div className="section-label">
+          {mailSources.length} {mailSources.length === 1 ? 'email cited' : 'emails cited'} in this answer
+        </div>
+      ) : null}
       {hidden > 0 ? (
         <div className="suggestions">
           <div>· {hidden} more not shown here — open Messages to see the full list.</div>
@@ -333,7 +340,7 @@ function MessageSection({
   )
 }
 
-function ReplyBody({
+export function ReplyBody({
   reply,
   onOpen,
   onReveal,
@@ -397,7 +404,7 @@ function ReplyBody({
 
       {reply.coverage ? <div className="notice">{reply.coverage}</div> : null}
 
-      {reply.mailSources && reply.mailSources.length > 0 ? (
+      {reply.mailSources && reply.mailSources.length > 0 && (!reply.messages || reply.messages.length === 0) ? (
         <details className="sources supporting-evidence">
           <summary>Messages behind this ({reply.mailSources.length})</summary>
           <div className="section-label" style={{ margin: '0 0 var(--s-3)' }}>
@@ -433,7 +440,11 @@ function ReplyBody({
       ) : null}
 
       {reply.messages && reply.messages.length > 0 ? (
-        <MessageSection messages={reply.messages} shape={reply.shape} />
+        <MessageSection
+          messages={reply.messages}
+          shape={reply.shape}
+          mailSources={reply.mailSources}
+        />
       ) : null}
 
       {reply.results.length > 0 ? (

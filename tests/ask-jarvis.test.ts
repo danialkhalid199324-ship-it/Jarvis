@@ -1307,6 +1307,45 @@ describe('grouping reads the whole message, not just the subject', () => {
     assert.equal(grouped.length, 2)
   })
 
+  test('same sender and similar subjects cannot merge different qualified references', () => {
+    const grouped = matters([
+      message({ id: '271', conversationId: 'c-271', subject: 'Invoice INV-0271 from Accounts', from: { name: 'Accounts', address: 'accounts@one.example' }, preview: 'Please review invoice INV-0271.' }),
+      message({ id: '261', conversationId: 'c-261', subject: 'Invoice INV-0261 from Accounts', from: { name: 'Accounts', address: 'accounts@one.example' }, preview: 'Please review invoice INV-0261.' }),
+      message({ id: '258', conversationId: 'c-258', subject: 'Invoice INV-0258 from Accounts', from: { name: 'Accounts', address: 'accounts@one.example' }, preview: 'Please review invoice INV-0258.' })
+    ])
+    assert.equal(grouped.length, 3)
+  })
+
+  test('thread fallback cannot bridge conflicting qualified references', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'shared', subject: 'INV-0261', preview: 'Invoice INV-0261 requires review.' }),
+      message({ id: 'bridge', conversationId: 'shared', subject: 'Follow up', preview: 'Could you please advise?' }),
+      message({ id: 'b', conversationId: 'shared', subject: 'INV-0258', preview: 'Invoice INV-0258 requires review.' })
+    ])
+    assert.equal(grouped.length, 2, 'the reference-free reply may attach to one matter but cannot join both')
+    assert.equal(grouped.some((matter) => matter.messages.some((m) => m.id === 'a') && matter.messages.some((m) => m.id === 'b')), false)
+  })
+
+  test('a multi-reference message cannot transitively bridge qualified matters', () => {
+    const grouped = matters([
+      message({ id: 'a', conversationId: 'c-a', subject: 'Invoice INV-0261', preview: 'Review INV-0261.' }),
+      message({ id: 'bridge', conversationId: 'c-bridge', subject: 'Account summary', preview: 'This summary mentions INV-0261 and INV-0258.' }),
+      message({ id: 'b', conversationId: 'c-b', subject: 'Invoice INV-0258', preview: 'Review INV-0258.' })
+    ])
+    assert.equal(grouped.length, 3)
+    assert.equal(grouped.some((matter) => matter.messages.some((m) => m.id === 'a') && matter.messages.some((m) => m.id === 'b')), false)
+  })
+
+  test('the exact drill-down is two matters across three messages', () => {
+    const grouped = matters([
+      message({ id: '261', conversationId: 'shared', subject: 'Invoice INV-0261', preview: 'Review INV-0261.' }),
+      message({ id: '258-a', conversationId: 'shared', subject: 'Invoice INV-0258', preview: 'Review INV-0258.' }),
+      message({ id: '258-b', conversationId: 'other', subject: 'Reminder: invoice #0258', preview: 'Reference #0258.' })
+    ])
+    assert.equal(grouped.length, 2)
+    assert.deepEqual(grouped.map((matter) => matter.messages.length).sort(), [1, 2])
+  })
+
   test('a figure-heavy body cannot merge the inbox', () => {
     const grouped = matters([
       message({
@@ -1402,6 +1441,42 @@ describe('the grouping is in the payload, not in a request to the model', () => 
       assert.ok(ids.includes(id), `${id} kept its own position`)
     }
   })
+
+  test('seven retrieved messages produce five distinct matters in the exact Top-5 shape', async (t) => {
+    const seven = [
+      graphMessage({ id: '271', conversationId: 'shared-finance', subject: 'Invoice INV-0271', bodyPreview: 'Invoice INV-0271 states payment was due.', body: { contentType: 'text', content: 'Invoice INV-0271 states payment was due.' } }),
+      graphMessage({ id: '261', conversationId: 'shared-finance', subject: 'Invoice INV-0261', bodyPreview: 'Invoice INV-0261 states payment was due.', body: { contentType: 'text', content: 'Invoice INV-0261 states payment was due.' } }),
+      graphMessage({ id: '258-a', conversationId: 'shared-finance', subject: 'Invoice INV-0258', bodyPreview: 'Invoice INV-0258 states payment was due.', body: { contentType: 'text', content: 'Invoice INV-0258 states payment was due.' } }),
+      graphMessage({ id: '258-b', conversationId: 'other-finance', subject: 'Reminder: invoice #0258', bodyPreview: 'Reference #0258 states payment was due.', body: { contentType: 'text', content: 'Reference #0258 states payment was due.' } }),
+      graphMessage({ id: 'audit-a', conversationId: 'audit', subject: 'Compliance evidence required', bodyPreview: 'Please provide compliance evidence before the deadline.', body: { contentType: 'text', content: 'Please provide compliance evidence before the deadline.' } }),
+      graphMessage({ id: 'audit-b', conversationId: 'audit', subject: 'Re: Compliance evidence required', bodyPreview: 'Following up on the same compliance evidence.', body: { contentType: 'text', content: 'Following up on the same compliance evidence.' } }),
+      graphMessage({ id: 'decision', conversationId: 'decision', subject: 'Approval required', bodyPreview: 'Approval required. Awaiting your decision.', body: { contentType: 'text', content: 'Approval required. Awaiting your decision.' } })
+    ]
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: { value: seven } }])
+    const { router, provider } = await harness(t, mock)
+    const reply = await router.ask(ANALYSIS_PROMPT)
+    const sent = String(provider!.calls[0]!.request.messages[0]!.content)
+
+    assert.equal((sent.match(/^=== MATTER \d+ OF 5/gm) ?? []).length, 5)
+    assert.match(reply.text, /5 matters need your attention, across 7 messages\./)
+    assert.equal((sent.match(/INV-0258|#0258/g) ?? []).length >= 2, true)
+    for (const reference of ['INV-0271', 'INV-0261']) assert.match(sent, new RegExp(reference))
+  })
+
+  test('the exact three-message drill-down reports two matters across three messages', async (t) => {
+    const three = [
+      graphMessage({ id: '261', conversationId: 'shared', subject: 'Invoice INV-0261', bodyPreview: 'Invoice INV-0261 states payment was due.', body: { contentType: 'text', content: 'Invoice INV-0261 states payment was due.' } }),
+      graphMessage({ id: '258-a', conversationId: 'shared', subject: 'Invoice INV-0258', bodyPreview: 'Invoice INV-0258 states payment was due.', body: { contentType: 'text', content: 'Invoice INV-0258 states payment was due.' } }),
+      graphMessage({ id: '258-b', conversationId: 'other', subject: 'Reminder: invoice #0258', bodyPreview: 'Reference #0258 states payment was due.', body: { contentType: 'text', content: 'Reference #0258 states payment was due.' } })
+    ]
+    const mock = new GraphMock([{ match: '/me/mailFolders/inbox/messages', body: { value: three } }])
+    const { router, provider } = await harness(t, mock)
+    const reply = await router.ask('Summarise the important invoice emails that need my attention.')
+    const sent = String(provider!.calls[0]!.request.messages[0]!.content)
+
+    assert.match(reply.text, /2 matters need your attention, across 3 messages\./)
+    assert.equal((sent.match(/^=== MATTER \d+ OF 2/gm) ?? []).length, 2)
+  })
 })
 
 describe('unsupported claims never reach the user', () => {
@@ -1414,7 +1489,12 @@ describe('unsupported claims never reach the user', () => {
     'Pay the Hizus and MJ Facility balances together.',
     'With the day clear, there is room to settle all of these in one sitting.',
     'You have a stack of overdue supplier invoices.',
-    'Your day is clear.'
+    'Your day is clear.',
+    'Start with these invoices because they have the largest combined figures.',
+    'This invoice has been paid.',
+    'The compliance action was completed.',
+    'The compliance action remains incomplete.',
+    'Payment is required now.'
   ]
 
   for (const claim of LIVE_CLAIMS) {

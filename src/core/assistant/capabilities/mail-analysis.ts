@@ -92,7 +92,7 @@ Why it matters: <one sentence, grounded in what the emails say>
 4. Omit the "Date stated" line entirely when no date is stated, and the "Amount stated" line entirely when no figure is stated. Never write "not specified", "unknown", "N/A" or similar — a missing line is correct, a placeholder is not.
 5. Where a matter holds more than one excerpt, say so in the block and spell out any way they disagree — different figures, different dates, a later notice contradicting an earlier one. That disagreement is usually the most useful thing you can tell the user.
 6. If an email asks for nothing, write "What they are asking for: Nothing — for information only."
-7. Finish with one short line saying what to look at first and why.
+7. Only name something to look at first when the excerpts contain a defensible reason such as explicit urgency, a deadline, a blocking dependency, security/compliance risk, or a required response. Monetary size alone is not a reason to put a matter first. If no matter has stronger evidence than the others, omit the recommendation.
 8. No greeting, no sign-off, no preamble, no restating of these instructions.
 9. If none of the excerpts needs anything from the user, say so plainly in one sentence instead of manufacturing urgency.`
 
@@ -170,19 +170,36 @@ const MAX_REFERENCES = 4
  *     merge is obvious, where a missed one is not.
  */
 export function referenceTokens(message: ScoredMailMessage): Set<string> {
+  return referenceEvidence(message).tokens
+}
+
+interface ReferenceEvidence {
+  tokens: Set<string>
+  /** Prefix + digits identifiers. Distinct values are hard matter boundaries. */
+  qualified: Set<string>
+}
+
+function referenceEvidence(message: ScoredMailMessage): ReferenceEvidence {
   const haystack = `${message.subject}\n${(message.body ?? message.preview ?? '').slice(0, REFERENCE_SCAN_CHARS)}`
   const tokens = new Set<string>()
+  const qualified = new Set<string>()
+  let references = 0
 
   for (const match of haystack.matchAll(REFERENCE)) {
-    if (tokens.size >= MAX_REFERENCES) break
+    if (references >= MAX_REFERENCES) break
     const digits = (match[2] ?? match[3] ?? '').replace(/[-_/\s]/g, '')
     if (!digits) continue
     const prefix = match[1]?.toUpperCase()
-    if (prefix) tokens.add(`${prefix}${digits}`)
+    if (prefix) {
+      const identifier = `${prefix}${digits}`
+      tokens.add(identifier)
+      qualified.add(identifier)
+    }
     if (digits.length >= 4) tokens.add(digits)
+    references += 1
   }
 
-  return tokens
+  return { tokens, qualified }
 }
 
 /** Prefixes people put in front of a subject when chasing the same thing. */
@@ -255,6 +272,8 @@ export function matterKey(message: ScoredMailMessage): string {
 export function groupIntoMatters(messages: readonly ScoredMailMessage[]): MailMatter[] {
   const ranked = rankByAttention(messages)
   const parent = ranked.map((_, i) => i)
+  const references = ranked.map(referenceEvidence)
+  const qualifiedByRoot = references.map((evidence) => new Set(evidence.qualified))
 
   const find = (i: number): number => {
     let root = i
@@ -271,15 +290,26 @@ export function groupIntoMatters(messages: readonly ScoredMailMessage[]): MailMa
   const union = (a: number, b: number): void => {
     const rootA = find(a)
     const rootB = find(b)
+    if (rootA === rootB) return
+
+    // A component may represent at most one qualified identifier. This makes
+    // the boundary transitive: a shared thread, bare-number message or other
+    // bridge cannot connect INV-1001 to INV-1002 indirectly.
+    const combined = new Set([...qualifiedByRoot[rootA]!, ...qualifiedByRoot[rootB]!])
+    if (combined.size > 1) return
+
     // The lower index wins, so the most pressing message stays the primary.
-    if (rootA !== rootB) parent[Math.max(rootA, rootB)] = Math.min(rootA, rootB)
+    const winner = Math.min(rootA, rootB)
+    const loser = Math.max(rootA, rootB)
+    parent[loser] = winner
+    qualifiedByRoot[winner] = combined
   }
 
   const firstByToken = new Map<string, number>()
   const firstByKey = new Map<string, number>()
 
   ranked.forEach((message, index) => {
-    const tokens = referenceTokens(message)
+    const tokens = references[index]!.tokens
     for (const token of tokens) {
       const seen = firstByToken.get(`ref:${token}`)
       if (seen === undefined) firstByToken.set(`ref:${token}`, index)

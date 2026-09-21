@@ -79,6 +79,18 @@ const ASSERTIONS: Array<{ pattern: RegExp; label: string }> = [
     label: 'claims something was not done'
   },
   {
+    pattern: /\b(?:is|was|are|were|has|have|had)\s+(?:already\s+)?(?:been\s+)?(?:paid|settled|completed|submitted|actioned|resolved)\b/i,
+    label: 'claims something was completed without verification'
+  },
+  {
+    pattern: /\b(?:is|was|are|were|remains?)\s+(?:incomplete|uncompleted|unfinished|unresolved)|\b(?:is|was|are|were)\s+not\s+(?:complete|completed|finished|resolved)\b/i,
+    label: 'claims something remains incomplete without verification'
+  },
+  {
+    pattern: /\bpayment\s+(?:is\s+)?(?:required|needed|due)\s+(?:right\s+)?now\b/i,
+    label: 'claims payment is required now'
+  },
+  {
     pattern: /\bnothing\s+(?:else\s+)?(?:booked|scheduled|on)\b.{0,40}\bso\b/i,
     label: 'reasons from an empty calendar to a free day'
   }
@@ -106,6 +118,10 @@ const PAYMENT_ACTION =
 const CONDITIONAL_PAYMENT =
   /\b(?:if|whether|unless|only if|should)\b[^.!?]{0,120}\b(?:pay(?:ing)?|settle|clear|discharge|release|arrange payment)\b/i
 
+/** A large figure is evidence of size, not evidence that its matter comes first. */
+const AMOUNT_ONLY_PRIORITY =
+  /\b(?:start with|look at first|first priority|prioriti[sz]e|handle first|deal with first)\b[^.!?]{0,160}\b(?:largest|highest|biggest|combined)\s+(?:amounts?|figures?|values?|balances?|totals?)\b/i
+
 /** Split into sentences, keeping enough of each to quote back. */
 function sentences(text: string): string[] {
   return text
@@ -127,6 +143,13 @@ export interface UnsupportedClaim {
 export function findUnsupportedClaims(text: string): UnsupportedClaim[] {
   const found: UnsupportedClaim[] = []
   for (const sentence of sentences(text)) {
+    if (AMOUNT_ONLY_PRIORITY.test(sentence)) {
+      found.push({
+        sentence: sentence.slice(0, 200),
+        label: 'prioritises a matter from monetary size alone'
+      })
+      continue
+    }
     if (PAYMENT_ACTION.test(sentence) && !CONDITIONAL_PAYMENT.test(sentence)) {
       found.push({
         sentence: sentence.slice(0, 200),

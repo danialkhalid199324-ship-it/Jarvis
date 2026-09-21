@@ -22,7 +22,7 @@ You will be given the facts of their day: the meetings on their connected calend
 2. Open with one or two sentences on the shape of the day — what is on the connected calendar, and the single thing most worth their attention.
 3. Then, if there is mail worth acting on, give one short line per message in the order provided: who it is from, what the email says they want, and what the user should do about it — inside the evidence boundary above. Include a date or an amount only when an email states one, attributed to that email; leave the point out entirely otherwise, and never write "not specified" or similar.
 4. Then note anything about the timing of the day that is genuinely visible in the times given — a collision, a tight turnaround, a long block, an afternoon with nothing booked on the calendar. Say nothing if there is nothing to say. Never turn an empty calendar into a claim about how much time the user has.
-5. Close with one line naming what to look at first.
+5. Name something to look at first only when the facts contain a defensible reason such as explicit urgency, a deadline, a blocking dependency, security/compliance risk, or a required response. Monetary size alone is not a reason. If no item has stronger evidence than the others, omit this line.
 6. Let the length follow the day. A quiet day is two sentences. A heavy one may need a dozen lines. Never pad and never repeat a point.
 7. If there is genuinely nothing pressing, say so plainly in one sentence and stop. Do not manufacture urgency.
 8. No greeting, no sign-off, no headings, no restating of these instructions.`
