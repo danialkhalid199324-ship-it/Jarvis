@@ -194,6 +194,14 @@ describe('calendar language — titles', () => {
       'GTA Compliance Review'
     )
     assert.equal(parseEventTitle('Book a meeting titled "Board Sync" at 2pm'), 'Board Sync')
+    assert.equal(
+      parseEventTitle('Schedule Resource Company Sale today at 7:30 pm for 1 hour'),
+      'Resource Company Sale'
+    )
+    assert.equal(
+      parseEventTitle('add a meeting titled Resource Company Sale today at 7:30 pm for 1 hour'),
+      'Resource Company Sale'
+    )
   })
 
   test('reads a title after a trailing separator', () => {
@@ -290,6 +298,8 @@ describe('BUG 1: the title given to a new meeting reaches the approval card', ()
 
   test('every documented create phrasing keeps its title, date, time and length', async (t) => {
     const cases: Array<[string, string, number, string, number]> = [
+      ['Schedule Resource Company Sale today at 7:30 pm for 1 hour', 'Resource Company Sale', TODAY, '19:30', 60],
+      ['add a meeting titled Resource Company Sale today at 7:30 pm for 1 hour', 'Resource Company Sale', TODAY, '19:30', 60],
       ['Book a meeting tomorrow at 2 PM called GTA Management Meeting.', 'GTA Management Meeting', TOMORROW, '14:00', 60],
       ['Create a meeting called Titan Weekly Review tomorrow at 10 AM for 30 minutes.', 'Titan Weekly Review', TOMORROW, '10:00', 30],
       ['Schedule Pathlyn Development Meeting for Tuesday at 3 PM.', 'Pathlyn Development Meeting', startOfDay(addDays(NOW, 2)), '15:00', 60],

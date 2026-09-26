@@ -546,6 +546,32 @@ select {
   gap: var(--s-2);
 }
 
+.evidence-matters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.evidence-matter__heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  margin-bottom: var(--s-2);
+  color: var(--text-secondary);
+}
+
+.evidence-matter__heading span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.evidence-matter__heading strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .result {
   padding: var(--s-4);
   border: 1px solid var(--line);

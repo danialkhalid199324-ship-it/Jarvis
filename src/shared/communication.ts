@@ -124,6 +124,16 @@ export interface ScoredMailMessage extends MailMessage {
   attention: AttentionAssessment
 }
 
+/**
+ * Deterministic evidence grouping prepared by the core. Message ids point back
+ * to `JarvisReply.messages`, so every individual source remains available.
+ */
+export interface MailEvidenceMatter {
+  key: string
+  title: string
+  messages: Array<{ accountId: string; messageId: string }>
+}
+
 export interface MailQuery {
   /** Restrict to one account; omit to search every connected account. */
   accountId?: string
@@ -362,6 +372,8 @@ export interface JarvisReply extends AssistantReply {
   mailSources?: MailSourceReference[]
   /** Messages to render as cards. */
   messages?: ScoredMailMessage[]
+  /** Existing deterministic matter/conversation grouping for those messages. */
+  messageGroups?: MailEvidenceMatter[]
   /** Events to render as cards. */
   events?: CalendarEvent[]
   /** A prepared draft awaiting the user's review. Never sent. */

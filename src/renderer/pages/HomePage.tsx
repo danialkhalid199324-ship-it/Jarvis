@@ -296,20 +296,36 @@ const SUPPORTING_CARD_LIMIT = 15
 function MessageSection({
   messages,
   shape,
-  mailSources
+  mailSources,
+  messageGroups
 }: {
   messages: NonNullable<JarvisReply['messages']>
   shape: JarvisReply['shape']
   mailSources?: JarvisReply['mailSources']
+  messageGroups?: JarvisReply['messageGroups']
 }): React.JSX.Element {
   const written = shape === 'analyse' || shape === 'brief'
   const limit = written ? SUPPORTING_CARD_LIMIT : RETRIEVAL_CARD_LIMIT
   const shown = messages.slice(0, limit)
   const hidden = messages.length - shown.length
+  const byKey = new Map(shown.map((message) => [`${message.accountId}:${message.id}`, message]))
+  const groups = (messageGroups && messageGroups.length > 0
+    ? messageGroups.map((group) => ({
+        key: group.key,
+        title: group.title,
+        messages: group.messages
+          .map((reference) => byKey.get(`${reference.accountId}:${reference.messageId}`))
+          .filter((message): message is (typeof shown)[number] => message !== undefined)
+      }))
+    : shown.map((message) => ({
+        key: `${message.accountId}:${message.conversationId || message.id}`,
+        title: message.subject || '(no subject)',
+        messages: [message]
+      }))).filter((group) => group.messages.length > 0)
 
   return (
     <details className="supporting-evidence">
-      <summary>{written ? `Messages behind this (${messages.length})` : `${messages.length} messages`}</summary>
+      <summary>Messages behind this ({messages.length})</summary>
       <div className="section-label">
         {written
           ? hidden > 0
@@ -321,9 +337,19 @@ function MessageSection({
             ? `Showing ${shown.length} of ${messages.length} messages`
             : `${shown.length} ${shown.length === 1 ? 'message' : 'messages'}`}
       </div>
-      <div className="results">
-        {shown.map((message) => (
-          <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
+      <div className="evidence-matters">
+        {groups.map((group, index) => (
+          <section className="evidence-matter" key={group.key}>
+            <div className="evidence-matter__heading">
+              <span>Matter {index + 1} · {group.messages.length} {group.messages.length === 1 ? 'message' : 'messages'}</span>
+              <strong>{group.title}</strong>
+            </div>
+            <div className="results">
+              {group.messages.map((message) => (
+                <MessageCard key={`${message.accountId}-${message.id}`} message={message} />
+              ))}
+            </div>
+          </section>
         ))}
       </div>
       {mailSources && mailSources.length > 0 ? (
@@ -444,6 +470,7 @@ export function ReplyBody({
           messages={reply.messages}
           shape={reply.shape}
           mailSources={reply.mailSources}
+          messageGroups={reply.messageGroups}
         />
       ) : null}
 

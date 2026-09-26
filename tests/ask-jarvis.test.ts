@@ -1461,6 +1461,12 @@ describe('the grouping is in the payload, not in a request to the model', () => 
     assert.match(reply.text, /5 matters need your attention, across 7 messages\./)
     assert.equal((sent.match(/INV-0258|#0258/g) ?? []).length >= 2, true)
     for (const reference of ['INV-0271', 'INV-0261']) assert.match(sent, new RegExp(reference))
+    assert.equal(reply.messageGroups?.length, 5, 'the UI receives the same five matters')
+    assert.equal(
+      reply.messageGroups?.some((matter) => matter.messages.length === 2),
+      true,
+      'related source messages remain accessible inside one matter'
+    )
   })
 
   test('the exact three-message drill-down reports two matters across three messages', async (t) => {

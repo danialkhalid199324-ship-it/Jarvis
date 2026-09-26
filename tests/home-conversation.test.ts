@@ -76,6 +76,44 @@ describe('Home response evidence ownership', () => {
     assert.equal((html.match(/Messages behind this \(1\)/g) ?? []).length, 1)
   })
 
+  test('retrieval replies use the same messages-behind label and underlying count', () => {
+    const reply = analysisReply('INV-0258')
+    reply.shape = 'retrieve'
+    const html = render(reply)
+    assert.equal((html.match(/Messages behind this \(1\)/g) ?? []).length, 1)
+    assert.doesNotMatch(html, />1 messages</)
+  })
+
+  test('related evidence is visibly grouped while every source message remains accessible', () => {
+    const first = supportingMessage('notice-a', 'Invoice INV-0258')
+    const second = supportingMessage('notice-b', 'Reminder: Invoice INV-0258')
+    const reply = analysisReply('unused')
+    reply.messages = [first, second]
+    reply.messageGroups = [{
+      key: 'reference:INV0258',
+      title: first.subject,
+      messages: [
+        { accountId: first.accountId, messageId: first.id },
+        { accountId: second.accountId, messageId: second.id }
+      ]
+    }]
+    reply.mailSources = [first, second].map((message) => ({
+      messageId: message.id,
+      accountId: message.accountId,
+      accountLabel: message.accountLabel,
+      subject: message.subject,
+      from: message.from!.address,
+      receivedAt: message.receivedAt
+    }))
+
+    const html = render(reply)
+    assert.match(html, /Messages behind this \(2\)/)
+    assert.match(html, /Matter 1 · 2 messages/)
+    assert.match(html, /Invoice INV-0258/)
+    assert.match(html, /Reminder: Invoice INV-0258/)
+    assert.equal((html.match(/Sent to Claude/g) ?? []).length, 1)
+  })
+
   test('evidence and provider disclosure stay with their own response', () => {
     const first = render(analysisReply('INV-0258'))
     const second = render(analysisReply('INV-0261'))

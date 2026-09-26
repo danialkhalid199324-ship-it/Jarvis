@@ -123,6 +123,30 @@ describe('calendar routing', () => {
     assert.equal(route('Book a meeting with Ali on Thursday.').calendarIntent, 'prepare_create')
     assert.equal(route("Cancel tomorrow's stand-up.").calendarIntent, 'prepare_cancel')
   })
+
+  test('equivalent calendar create actions never fall through to lookup', () => {
+    const creates = [
+      'Schedule Resource Company Sale today at 7:30 pm for 1 hour',
+      'add a meeting titled Resource Company Sale today at 7:30 pm for 1 hour',
+      'add an event called Resource Company Sale tomorrow at 9am',
+      'create a meeting called Resource Company Sale tomorrow at 9am',
+      'create an event called Resource Company Sale tomorrow at 9am',
+      'book a meeting with Ali on Thursday',
+      'put Resource Company Sale on my calendar tomorrow at 9am'
+    ]
+
+    for (const question of creates) {
+      const result = route(question)
+      assert.equal(result.capability, 'calendar', question)
+      assert.equal(result.calendarIntent, 'prepare_create', question)
+    }
+  })
+
+  test('genuine calendar questions remain lookups', () => {
+    assert.equal(route('What is on my calendar today?').calendarIntent, 'today')
+    assert.equal(route('Do I have anything at 7:30 pm?').calendarIntent, 'answer')
+    assert.equal(route('Show my meetings tomorrow.').calendarIntent, 'tomorrow')
+  })
 })
 
 describe('daily brief routing', () => {

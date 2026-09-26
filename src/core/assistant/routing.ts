@@ -244,6 +244,26 @@ const CREATE =
   /\b(book|schedule|set up|create|arrange|organis[ez]e|put in)\b.*\b(meeting|call|appointment|time|catch[- ]?up)\b/i
 /** "Add the GTA review to my calendar" names no meeting noun but is a create. */
 const CREATE_INTO_CALENDAR = /\b(add|put)\b.*\b(?:to|in|on)\s+(?:my\s+)?(calendar|diary|schedule)\b/i
+/**
+ * An imperative create verb can name the event directly, without repeating a
+ * generic noun: "Schedule Resource Company Sale today at 7:30". Anchoring the
+ * verb after optional politeness keeps genuine lookups such as "show my
+ * schedule" out of the write path.
+ */
+const CREATE_ACTION =
+  /^\s*(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?(?:schedule|book|create|arrange|organis[ez]e|set\s+up)\b/i
+/** "Add a meeting/event" is also unambiguously a create instruction. */
+const ADD_EVENT_ACTION =
+  /^\s*(?:(?:please|kindly)\s+)?(?:(?:can|could|would|will)\s+you\s+)?add\s+(?:(?:a|an|the|my|new)\s+)?(?:meeting|event|appointment|call)\b/i
+
+function isCalendarCreateInstruction(question: string): boolean {
+  return (
+    CREATE.test(question) ||
+    CREATE_INTO_CALENDAR.test(question) ||
+    CREATE_ACTION.test(question) ||
+    ADD_EVENT_ACTION.test(question)
+  )
+}
 /** "Make it 30 minutes longer" / "make my 7 PM meeting an hour" are updates. */
 const RESIZE = /\b(make|extend|shorten|lengthen|reduce|stretch)\b.*\b(hours?|hrs?|minutes?|mins?|longer|shorter)\b/i
 const UPDATE = /\b(move|reschedul\w*|shift|change|push|bring forward|postpone)\b/i
@@ -343,7 +363,7 @@ function mailIntentFor(question: string, shape: RequestShape): MailIntent {
 function calendarIntentFor(question: string): CalendarIntent {
   if (CANCEL.test(question)) return 'prepare_cancel'
   if (UPDATE.test(question) || RESIZE.test(question)) return 'prepare_update'
-  if (CREATE.test(question) || CREATE_INTO_CALENDAR.test(question)) return 'prepare_create'
+  if (isCalendarCreateInstruction(question)) return 'prepare_create'
   if (FREE.test(question)) return 'free'
   if (WEEK.test(question)) return 'week'
   if (TOMORROW.test(question)) return 'tomorrow'
@@ -388,7 +408,7 @@ export function routeQuestion(question: string, context: RoutingContext): Route 
   if (CALENDAR_WEAK.test(text)) calendar += 1
   if (CALENDAR_ACTION_VERB.test(text) && MEETING_CONTEXT.test(text)) calendar += 3
   // Phrasings that name no meeting noun but are unmistakably calendar work.
-  if (CREATE_INTO_CALENDAR.test(text)) calendar += 3
+  if (isCalendarCreateInstruction(text)) calendar += 3
   if (RESIZE.test(text) && MEETING_CONTEXT.test(text)) calendar += 3
   if (DOCUMENT_STRONG.test(text)) documents += 3
 

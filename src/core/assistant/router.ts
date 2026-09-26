@@ -8,6 +8,7 @@ import type { DailyBriefService } from '../communication/daily-brief'
 import type { MicrosoftWorkspace } from '../microsoft/workspace'
 import { formatTime } from '../communication/time'
 import type { DailyBrief, JarvisReply } from '../../shared/communication'
+import { groupIntoMatters } from './capabilities/mail-analysis'
 
 export interface RouterDeps {
   /** The V0.1 document assistant, used unchanged. */
@@ -157,6 +158,14 @@ export class JarvisRouter {
       sources: [],
       suggestions: [],
       messages: facts.priorityMail,
+      messageGroups: groupIntoMatters(facts.priorityMail).map((matter) => ({
+        key: matter.key,
+        title: matter.primary.subject || '(no subject)',
+        messages: matter.messages.map((message) => ({
+          accountId: message.accountId,
+          messageId: message.id
+        }))
+      })),
       events: facts.meetingsToday
     }
     if (brief.disclosure) reply.disclosure = brief.disclosure

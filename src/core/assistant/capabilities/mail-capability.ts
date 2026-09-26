@@ -25,6 +25,7 @@ import {
   knowledgeCaveat,
   renderMatters,
   selectForAnalysis,
+  groupIntoMatters,
   type AnalysisSelection,
   type MailMatter
 } from './mail-analysis'
@@ -773,7 +774,15 @@ export class MailCapability {
       results: [],
       sources: [],
       suggestions: input.suggestions ?? [],
-      messages: input.messages
+      messages: input.messages,
+      messageGroups: groupIntoMatters(input.messages).map((matter) => ({
+        key: matter.key,
+        title: matter.primary.subject || '(no subject)',
+        messages: matter.messages.map((message) => ({
+          accountId: message.accountId,
+          messageId: message.id
+        }))
+      }))
     }
     if (coverage) reply.coverage = coverage
     if (input.disclosure) reply.disclosure = input.disclosure
