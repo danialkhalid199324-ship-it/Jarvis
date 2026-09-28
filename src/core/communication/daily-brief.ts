@@ -159,6 +159,7 @@ export class DailyBriefService {
     ].join('\n\n')
 
     try {
+      let responseModel = this.deps.providers.activeModelId
       const ask = async (
         messages: Array<{ role: 'user' | 'assistant'; content: string }>
       ): Promise<string> => {
@@ -171,6 +172,7 @@ export class DailyBriefService {
           },
           this.deps.providers.activeModelId
         )
+        responseModel = response.model
         return response.text.trim()
       }
 
@@ -203,7 +205,7 @@ export class DailyBriefService {
       brief.disclosure = mailDisclosure(
         bundle,
         { id: provider.id, label: provider.label, local: provider.local },
-        this.deps.providers.activeModelId
+        responseModel
       )
       this.deps.logger.info('brief.generated', {
         meetings: meetingsToday.length,

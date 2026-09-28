@@ -42,6 +42,7 @@ export interface AIProvider {
   /** Plain-language statement of where the user's text goes. Shown in Settings. */
   readonly dataNotice: string
   readonly models: ProviderModelInfo[]
+  readonly defaultModel: string
 
   /** Whether the provider has everything it needs to be called right now. */
   isConfigured(): boolean

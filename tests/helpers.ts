@@ -48,12 +48,15 @@ export class FakeProvider implements AIProvider {
   readonly requiresApiKey = false
   readonly dataNotice = 'Test provider. Nothing leaves the machine.'
   readonly models = [{ id: 'fake-model', label: 'Fake' }]
+  readonly defaultModel = 'fake-model'
 
   readonly calls: Array<{ request: CompletionRequest; model: string }> = []
   private readonly responder: (request: CompletionRequest) => string
+  private readonly responseModel?: string
 
-  constructor(responder: (request: CompletionRequest) => string) {
+  constructor(responder: (request: CompletionRequest) => string, responseModel?: string) {
     this.responder = responder
+    this.responseModel = responseModel
   }
 
   isConfigured(): boolean {
@@ -62,7 +65,7 @@ export class FakeProvider implements AIProvider {
 
   async complete(request: CompletionRequest, model: string): Promise<CompletionResponse> {
     this.calls.push({ request, model })
-    return { text: this.responder(request), model }
+    return { text: this.responder(request), model: this.responseModel ?? model }
   }
 }
 

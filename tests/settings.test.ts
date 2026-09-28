@@ -15,6 +15,54 @@ const reversibleEncryptor: Encryptor = {
 }
 
 describe('settings store', () => {
+  test('migrates the legacy single model without changing the active selection', async (t) => {
+    const dir = await makeTempDir('settings-legacy-ai')
+    t.after(() => cleanup(dir))
+    await fs.writeFile(
+      path.join(dir, 'settings.json'),
+      JSON.stringify({
+        displayName: 'Danial',
+        ai: { activeProviderId: 'anthropic', model: 'claude-sonnet-5' }
+      })
+    )
+
+    const store = await SettingsStore.open(dir)
+    const ai = store.get().ai
+    assert.equal(ai.activeProviderId, 'anthropic')
+    assert.equal(ai.model, 'claude-sonnet-5')
+    assert.equal(ai.modelsByProvider.anthropic, 'claude-sonnet-5')
+    assert.ok(ai.modelsByProvider.openai)
+  })
+
+  test('remembers a separate model for each provider across restarts', async (t) => {
+    const dir = await makeTempDir('settings-provider-models')
+    t.after(() => cleanup(dir))
+    const store = await SettingsStore.open(dir)
+    await store.update({
+      ai: {
+        ...store.get().ai,
+        activeProviderId: 'openai',
+        model: 'gpt-6-sol',
+        modelsByProvider: {
+          ...store.get().ai.modelsByProvider,
+          anthropic: 'claude-sonnet-5',
+          openai: 'gpt-6-sol'
+        }
+      }
+    })
+
+    const reopened = await SettingsStore.open(dir)
+    assert.equal(reopened.get().ai.model, 'gpt-6-sol')
+    assert.equal(reopened.get().ai.modelsByProvider.anthropic, 'claude-sonnet-5')
+    assert.equal(reopened.get().ai.modelsByProvider.openai, 'gpt-6-sol')
+
+    await reopened.update({
+      ai: { ...reopened.get().ai, activeProviderId: 'anthropic', model: 'claude-sonnet-5' }
+    })
+    assert.equal(reopened.get().ai.model, 'claude-sonnet-5')
+    assert.equal(reopened.get().ai.modelsByProvider.openai, 'gpt-6-sol')
+  })
+
   test('persists authorised folders across restarts', async (t) => {
     const dir = await makeTempDir('settings')
     t.after(() => cleanup(dir))
@@ -58,6 +106,20 @@ describe('settings store', () => {
 
     const raw = await fs.readFile(path.join(dir, 'settings.json'), 'utf8')
     assert.ok(!raw.includes('sk-ant-supersecret'))
+  })
+
+  test('never stores an OpenAI API key in settings or plaintext secret storage', async (t) => {
+    const dir = await makeTempDir('settings-openai-secret')
+    t.after(() => cleanup(dir))
+    await SettingsStore.open(dir)
+    const secrets = await SecretStore.open(dir, reversibleEncryptor)
+    await secrets.set('openai', 'sk-openai-supersecret')
+
+    const settingsRaw = await fs.readFile(path.join(dir, 'settings.json'), 'utf8').catch(() => '')
+    const secretsRaw = await fs.readFile(path.join(dir, 'secrets.enc.json'), 'utf8')
+    assert.ok(!settingsRaw.includes('sk-openai-supersecret'))
+    assert.ok(!secretsRaw.includes('sk-openai-supersecret'))
+    assert.equal(secrets.get('openai'), 'sk-openai-supersecret')
   })
 })
 

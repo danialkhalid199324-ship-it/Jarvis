@@ -1,17 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
-import type { ProviderModelInfo } from '../../shared/types'
 import {
   ProviderNotConfiguredError,
   type AIProvider,
   type CompletionRequest,
   type CompletionResponse
 } from './provider'
-
-const MODELS: ProviderModelInfo[] = [
-  { id: 'claude-opus-5', label: 'Claude Opus 5 — most capable' },
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5 — faster, lower cost' },
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5 — fastest, lowest cost' }
-]
+import { MODEL_CATALOG } from './model-catalog'
 
 /**
  * Anthropic Claude.
@@ -26,7 +20,8 @@ export class AnthropicProvider implements AIProvider {
   readonly requiresApiKey = true
   readonly dataNotice =
     'Your question and the specific document excerpts Jarvis selected are sent to Anthropic to generate an answer. Whole files and whole folders are never sent.'
-  readonly models = MODELS
+  readonly models = MODEL_CATALOG.anthropic.models
+  readonly defaultModel = MODEL_CATALOG.anthropic.defaultModel
 
   private readonly getApiKey: () => string | null
 

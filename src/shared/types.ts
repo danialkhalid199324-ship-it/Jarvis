@@ -197,6 +197,7 @@ export interface ProviderDescriptor {
   /** Whether a key is currently stored for it. */
   configured: boolean
   models: ProviderModelInfo[]
+  defaultModel: string
   /** Shown in Settings so the user knows where their text would go. */
   dataNotice: string
   /** Optional endpoint override (OpenAI-compatible providers). */
@@ -206,6 +207,8 @@ export interface ProviderDescriptor {
 export interface AISettings {
   activeProviderId: string
   model: string
+  /** Last model chosen for each provider. */
+  modelsByProvider: Record<string, string>
   /** For OpenAI-compatible providers pointed at a custom/local endpoint. */
   baseUrl?: string
 }

@@ -293,16 +293,28 @@ function AIProvider({
 
   const active = providers.find((p) => p.id === settings.ai.activeProviderId)
   const knownModels = active?.models ?? []
-  const modelIsKnown = knownModels.some((m) => m.id === settings.ai.model)
+  const currentModel =
+    settings.ai.modelsByProvider[settings.ai.activeProviderId] ?? settings.ai.model
+  const modelIsKnown = knownModels.some((m) => m.id === currentModel)
   // Drop into free-text automatically when the saved model is not one we list,
   // so a hand-entered identifier is never silently replaced.
   const customModel = forceCustomModel || (knownModels.length > 0 && !modelIsKnown)
 
+  const selectedModel = knownModels.find((model) => model.id === currentModel)
   const modelHelp = customModel
     ? 'Enter the exact model identifier your provider expects.'
-    : knownModels.length > 0
-      ? 'Opus 5 is the most capable. Sonnet 5 is a good everyday choice and costs less per question.'
+    : selectedModel
+      ? selectedModel.label
       : 'Enter the model identifier your provider expects.'
+
+  function aiWithModel(providerId: string, model: string): JarvisSettings['ai'] {
+    return {
+      ...settings.ai,
+      activeProviderId: providerId,
+      model,
+      modelsByProvider: { ...settings.ai.modelsByProvider, [providerId]: model }
+    }
+  }
 
   async function save(patch: Partial<JarvisSettings>): Promise<void> {
     setMessage(null)
@@ -338,11 +350,13 @@ function AIProvider({
             // dropdown rather than leaving the free-text field open.
             setForceCustomModel(false)
             void save({
-              ai: {
-                ...settings.ai,
-                activeProviderId: e.target.value,
-                model: provider?.models[0]?.id ?? settings.ai.model
-              }
+              ai: aiWithModel(
+                e.target.value,
+                settings.ai.modelsByProvider[e.target.value] ??
+                  provider?.defaultModel ??
+                  provider?.models[0]?.id ??
+                  settings.ai.model
+              )
             })
           }}
         >
@@ -366,13 +380,13 @@ function AIProvider({
           <select
             id="model"
             className="select"
-            value={settings.ai.model}
+            value={currentModel}
             onChange={(e) => {
               if (e.target.value === CUSTOM_MODEL) {
                 setCustomModel(true)
                 return
               }
-              void save({ ai: { ...settings.ai, model: e.target.value } })
+              void save({ ai: aiWithModel(settings.ai.activeProviderId, e.target.value) })
             }}
           >
             {knownModels.map((model) => (
@@ -388,8 +402,10 @@ function AIProvider({
               id="model"
               className="input input--mono"
               placeholder="Model identifier"
-              value={settings.ai.model}
-              onChange={(e) => void save({ ai: { ...settings.ai, model: e.target.value } })}
+              value={currentModel}
+              onChange={(e) =>
+                void save({ ai: aiWithModel(settings.ai.activeProviderId, e.target.value) })
+              }
             />
             {knownModels.length > 0 ? (
               <button className="btn btn--ghost" onClick={() => setCustomModel(false)}>
@@ -409,7 +425,7 @@ function AIProvider({
           <input
             id="baseUrl"
             className="input input--mono"
-            placeholder="https://api.openai.com/v1"
+            placeholder="http://localhost:11434/v1"
             value={settings.ai.baseUrl ?? ''}
             onChange={(e) => void save({ ai: { ...settings.ai, baseUrl: e.target.value } })}
           />

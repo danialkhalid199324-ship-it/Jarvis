@@ -1,19 +1,12 @@
-import type { ProviderModelInfo } from '../../shared/types'
 import {
   ProviderNotConfiguredError,
   type AIProvider,
   type CompletionRequest,
   type CompletionResponse
 } from './provider'
+import { MODEL_CATALOG } from './model-catalog'
 
-const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
-
-const SUGGESTED_MODELS: ProviderModelInfo[] = [
-  { id: 'gpt-4.1', label: 'OpenAI GPT-4.1' },
-  { id: 'gpt-4.1-mini', label: 'OpenAI GPT-4.1 mini' },
-  { id: 'llama3.1:8b', label: 'Ollama — Llama 3.1 8B (runs on this Mac)' },
-  { id: 'qwen2.5:14b', label: 'Ollama — Qwen 2.5 14B (runs on this Mac)' }
-]
+const DEFAULT_BASE_URL = 'http://localhost:11434/v1'
 
 function isLocalEndpoint(baseUrl: string): boolean {
   try {
@@ -37,9 +30,9 @@ function isLocalEndpoint(baseUrl: string): boolean {
  */
 export class OpenAICompatibleProvider implements AIProvider {
   readonly id = 'openai-compatible'
-  readonly label = 'OpenAI-compatible (OpenAI, Ollama, LM Studio)'
-  readonly requiresApiKey = false
-  readonly models = SUGGESTED_MODELS
+  readonly label = 'OpenAI-compatible (local or custom)'
+  readonly models = MODEL_CATALOG['openai-compatible'].models
+  readonly defaultModel = MODEL_CATALOG['openai-compatible'].defaultModel
 
   private readonly getApiKey: () => string | null
   private readonly getBaseUrl: () => string
@@ -51,6 +44,10 @@ export class OpenAICompatibleProvider implements AIProvider {
 
   get local(): boolean {
     return isLocalEndpoint(this.getBaseUrl())
+  }
+
+  get requiresApiKey(): boolean {
+    return !this.local
   }
 
   get dataNotice(): string {
@@ -105,7 +102,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
 
     if (!response.ok) {
-      const body = await response.text().catch(() => '')
+      await response.text().catch(() => '')
       if (response.status === 401 || response.status === 403) {
         throw new Error('Your API key was rejected. Check it in Settings → AI Provider.')
       }
@@ -115,7 +112,7 @@ export class OpenAICompatibleProvider implements AIProvider {
       if (response.status === 429) {
         throw new Error('The provider is rate limiting requests right now. Try again in a moment.')
       }
-      throw new Error(`The provider returned an error (${response.status}). ${body.slice(0, 200)}`)
+      throw new Error(`The provider returned an error (${response.status}). Try again later.`)
     }
 
     const data = (await response.json()) as {

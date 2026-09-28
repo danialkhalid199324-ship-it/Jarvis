@@ -248,6 +248,7 @@ export class Assistant {
         model
       )
       text = response.text.trim()
+      disclosure.model = response.model
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       logger.error('assistant.external_call_failed', { providerId: provider.id, error: message })

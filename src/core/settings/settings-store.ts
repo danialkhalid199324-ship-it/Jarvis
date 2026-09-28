@@ -2,7 +2,8 @@ import path from 'node:path'
 import { readJson, writeJsonAtomic } from '../storage/json-file'
 import { describeOverlap } from '../security/paths'
 import { stableId } from '../util/ids'
-import type { AuthorisedFolder, JarvisSettings } from '../../shared/types'
+import type { AISettings, AuthorisedFolder, JarvisSettings } from '../../shared/types'
+import { MODEL_CATALOG, defaultModelFor } from '../ai/model-catalog'
 
 export const DEFAULT_MAX_FILE_SIZE_BYTES = 40 * 1024 * 1024 // 40 MB
 export const DEFAULT_MAX_CONTEXT_CHARS = 60_000
@@ -13,7 +14,12 @@ export function defaultSettings(displayName = 'there'): JarvisSettings {
     folders: [],
     ai: {
       activeProviderId: 'anthropic',
-      model: 'claude-opus-5'
+      model: MODEL_CATALOG.anthropic.defaultModel,
+      modelsByProvider: {
+        anthropic: MODEL_CATALOG.anthropic.defaultModel,
+        openai: MODEL_CATALOG.openai.defaultModel,
+        'openai-compatible': MODEL_CATALOG['openai-compatible'].defaultModel
+      }
     },
     microsoft: {},
     maxContextChars: DEFAULT_MAX_CONTEXT_CHARS,
@@ -39,10 +45,30 @@ export class SettingsStore {
     const file = path.join(dataDir, 'settings.json')
     const loaded = await readJson<Partial<JarvisSettings>>(file, {})
     const base = defaultSettings(displayName)
+    const loadedAi: Partial<AISettings> = loaded.ai ?? {}
+    const activeProviderId = loadedAi.activeProviderId ?? base.ai.activeProviderId
+    const legacyModel = loadedAi.model ?? base.ai.model
+    const modelsByProvider: Record<string, string> = {
+      ...base.ai.modelsByProvider,
+      ...(loadedAi.modelsByProvider ?? {})
+    }
+    // Older installs kept only the active model. Preserve it exactly for the
+    // provider that was selected when this schema is first read.
+    if (!loadedAi.modelsByProvider?.[activeProviderId]) {
+      modelsByProvider[activeProviderId] = legacyModel
+    }
+    const activeModel =
+      modelsByProvider[activeProviderId] ?? defaultModelFor(activeProviderId) ?? legacyModel
     const settings: JarvisSettings = {
       ...base,
       ...loaded,
-      ai: { ...base.ai, ...(loaded.ai ?? {}) },
+      ai: {
+        ...base.ai,
+        ...loadedAi,
+        activeProviderId,
+        model: activeModel,
+        modelsByProvider
+      },
       microsoft: { ...base.microsoft, ...(loaded.microsoft ?? {}) },
       folders: Array.isArray(loaded.folders) ? loaded.folders : []
     }
@@ -63,10 +89,28 @@ export class SettingsStore {
   }
 
   async update(patch: Partial<Omit<JarvisSettings, 'folders'>>): Promise<JarvisSettings> {
+    const nextAi = {
+      ...this.settings.ai,
+      ...(patch.ai ?? {}),
+      modelsByProvider: {
+        ...this.settings.ai.modelsByProvider,
+        ...(patch.ai?.modelsByProvider ?? {})
+      }
+    }
+    // Keep the legacy `model` field and the per-provider map in lockstep.
+    // This also makes direct settings writes behave like the Settings UI.
+    if (patch.ai?.model !== undefined) {
+      nextAi.modelsByProvider[nextAi.activeProviderId] = patch.ai.model
+    } else if (patch.ai?.activeProviderId !== undefined) {
+      nextAi.model =
+        nextAi.modelsByProvider[nextAi.activeProviderId] ??
+        defaultModelFor(nextAi.activeProviderId) ??
+        nextAi.model
+    }
     this.settings = {
       ...this.settings,
       ...patch,
-      ai: { ...this.settings.ai, ...(patch.ai ?? {}) },
+      ai: nextAi,
       microsoft: { ...this.settings.microsoft, ...(patch.microsoft ?? {}) }
     }
     await this.save()

@@ -114,7 +114,7 @@ export async function draftReply(
     disclosure: mailDisclosure(
       bundle,
       { id: provider.id, label: provider.label, local: provider.local },
-      model
+      response.model
     )
   }
   if (request.replyTo.conversationId) draft.conversationId = request.replyTo.conversationId

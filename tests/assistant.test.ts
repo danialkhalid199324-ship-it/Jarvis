@@ -45,7 +45,8 @@ function defaultResponder(answer: string) {
 
 async function harness(
   t: { after: (fn: () => unknown) => void },
-  responder: (request: CompletionRequest) => string
+  responder: (request: CompletionRequest) => string,
+  responseModel?: string
 ): Promise<Harness> {
   const archive = await makeTempDir('assistant-archive')
   const dataDir = await makeTempDir('assistant-data')
@@ -89,7 +90,7 @@ async function harness(
   }
   await indexer.run({ folders: [folder], maxFileSizeBytes: 40 * 1024 * 1024 })
 
-  const provider = new FakeProvider(responder)
+  const provider = new FakeProvider(responder, responseModel)
   const providers = new ProviderRegistry([provider], 'fake', 'fake-model')
   const session = new Session()
   const assistant = new Assistant({
@@ -178,6 +179,19 @@ describe('Jarvis V0.1 acceptance', () => {
     assert.ok(reply.disclosure!.excerptCount > 0)
     assert.ok(reply.disclosure!.charsSent > 0)
     assert.deepEqual(reply.disclosure!.fileNames, ['GTA Operational Plan 2026.pdf'])
+  })
+
+  test('disclosure uses the model reported by the successful provider response', async (t) => {
+    const { assistant } = await harness(
+      t,
+      defaultResponder('The staffing model is finalised [1].'),
+      'fake-model-resolved-version'
+    )
+
+    await assistant.ask('Find the latest GTA operational plan.')
+    const reply = await assistant.ask('Summarise it.')
+
+    assert.equal(reply.disclosure?.model, 'fake-model-resolved-version')
   })
 
   test('says so plainly when the documents do not contain the answer', async (t) => {

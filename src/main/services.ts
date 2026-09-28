@@ -131,7 +131,7 @@ export class Services {
       getApiKey: (providerId) => secrets.get(providerId),
       getBaseUrl: () => settings.get().ai.baseUrl,
       activeId: current.ai.activeProviderId,
-      activeModel: current.ai.model
+      activeModel: current.ai.modelsByProvider[current.ai.activeProviderId] ?? current.ai.model
     })
 
     const session = new Session()
@@ -259,7 +259,10 @@ export class Services {
   /** Keep the provider registry in step with saved settings. */
   syncProviders(): void {
     const ai = this.settings.get().ai
-    this.providers.setActive(ai.activeProviderId, ai.model)
+    this.providers.setActive(
+      ai.activeProviderId,
+      ai.modelsByProvider[ai.activeProviderId] ?? ai.model
+    )
   }
 }
 

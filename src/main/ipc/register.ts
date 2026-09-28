@@ -266,12 +266,14 @@ export function registerIpc(services: Services, getWindow: () => BrowserWindow |
   })
 
   handle<[string, string], boolean>(IPC.setApiKey, services, async (providerId, apiKey) => {
+    if (!services.providers.get(providerId)) throw new Error('That AI provider is not available.')
     await services.secrets.set(providerId, apiKey)
     services.logger.info('provider.key_stored', { providerId })
     return true
   })
 
   handle<[string], boolean>(IPC.clearApiKey, services, async (providerId) => {
+    if (!services.providers.get(providerId)) throw new Error('That AI provider is not available.')
     await services.secrets.clear(providerId)
     services.logger.info('provider.key_cleared', { providerId })
     return true

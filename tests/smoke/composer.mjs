@@ -46,6 +46,38 @@ const check = (n, ok, d = '') => { checks.push(ok); console.log(`${ok ? 'PASS' :
 const box = async (sel) => page.$eval(sel, (el) => { const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom } })
 
 await page.click('.nav__item:has-text("Settings")')
+await page.waitForSelector('select#provider')
+await page.waitForFunction(
+  () => document.querySelectorAll('#provider option').length === 3
+)
+const providerOptions = await page.$$eval('#provider option', (els) => els.map((e) => e.value))
+check(
+  'provider selector keeps Anthropic and separates official OpenAI from compatible endpoints',
+  providerOptions.includes('anthropic') &&
+    providerOptions.includes('openai') &&
+    providerOptions.includes('openai-compatible'),
+  providerOptions.join(', ')
+)
+await page.selectOption('#provider', 'openai')
+await page.waitForFunction(() => document.querySelector('#model option[value="gpt-6-luna"]'))
+const openAIModels = await page.$$eval('#model option', (els) => els.map((e) => e.value))
+check(
+  'official OpenAI shows the centralised Luna and Sol model choices',
+  openAIModels.includes('gpt-6-luna') && openAIModels.includes('gpt-6-sol')
+)
+check('official OpenAI does not show a custom endpoint field', (await page.locator('#baseUrl').count()) === 0)
+await page.selectOption('#model', 'gpt-6-sol')
+await page.waitForTimeout(250)
+await page.selectOption('#provider', 'anthropic')
+await page.waitForFunction(() => document.querySelector('#model option[value="claude-opus-5"]'))
+await page.selectOption('#provider', 'openai')
+await page.waitForFunction(() => document.querySelector('#model option[value="gpt-6-sol"]'))
+check('OpenAI model selection survives provider switching', (await page.inputValue('#model')) === 'gpt-6-sol')
+await page.selectOption('#provider', 'openai-compatible')
+await page.waitForSelector('#baseUrl')
+check('custom endpoint field appears only for the compatible provider', await page.locator('#baseUrl').isVisible())
+await page.selectOption('#provider', 'anthropic')
+await page.waitForFunction(() => document.querySelector('#model option[value="claude-opus-5"]'))
 await page.click('button:has-text("Index now")')
 await page.waitForFunction(() => Number(document.querySelector('.stat__value')?.textContent) >= 7, { timeout: 40000 })
 await page.click('.nav__item:has-text("Home")')

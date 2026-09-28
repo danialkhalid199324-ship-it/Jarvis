@@ -395,7 +395,7 @@ export class MailCapability {
 
     let text: string
     try {
-      text = await this.writeWithinEvidence(
+      const written = await this.writeWithinEvidence(
         provider,
         model,
         MAIL_ANALYSIS_SYSTEM,
@@ -403,6 +403,8 @@ export class MailCapability {
         () => deterministicAnalysis(grouped),
         signal
       )
+      text = written.text
+      disclosure.model = written.model
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logger.error('mail.external_call_failed', { providerId: provider.id, error: message })
@@ -513,17 +515,19 @@ export class MailCapability {
     prompt: string,
     fallback: () => string,
     signal?: AbortSignal
-  ): Promise<string> {
-    const ask = async (messages: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> => {
+  ): Promise<{ text: string; model: string }> {
+    const ask = async (
+      messages: Array<{ role: 'user' | 'assistant'; content: string }>
+    ): Promise<{ text: string; model: string }> => {
       const response = await provider.complete(
         { system, maxTokens: 2500, messages, ...(signal ? { signal } : {}) },
         model
       )
-      return response.text.trim()
+      return { text: response.text.trim(), model: response.model }
     }
 
     const first = await ask([{ role: 'user', content: prompt }])
-    const claims = findUnsupportedClaims(first)
+    const claims = findUnsupportedClaims(first.text)
     if (claims.length === 0) return first
 
     this.deps.logger.info('mail.evidence_correction', {
@@ -536,14 +540,14 @@ export class MailCapability {
 
     const second = await ask([
       { role: 'user', content: prompt },
-      { role: 'assistant', content: first },
+      { role: 'assistant', content: first.text },
       { role: 'user', content: correctionInstruction(claims) }
     ])
 
-    if (findUnsupportedClaims(second).length === 0) return second
+    if (findUnsupportedClaims(second.text).length === 0) return second
 
     this.deps.logger.info('mail.evidence_fallback', { providerId: provider.id })
-    return fallback()
+    return { text: fallback(), model: second.model }
   }
 
   /** Load full bodies for a small set, falling back to the preview on failure. */
@@ -618,6 +622,7 @@ export class MailCapability {
         model
       )
       text = response.text.trim()
+      disclosure.model = response.model
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logger.error('mail.external_call_failed', { providerId: provider.id, error: message })

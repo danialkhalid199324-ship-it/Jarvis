@@ -2,6 +2,7 @@ import type { ProviderDescriptor } from '../../shared/types'
 import type { AIProvider } from './provider'
 import { AnthropicProvider } from './anthropic-provider'
 import { OpenAICompatibleProvider } from './openai-compatible-provider'
+import { OpenAIProvider } from './openai-provider'
 
 /**
  * Holds the available providers and tracks which one is active.
@@ -30,6 +31,7 @@ export class ProviderRegistry {
     return new ProviderRegistry(
       [
         new AnthropicProvider(() => options.getApiKey('anthropic')),
+        new OpenAIProvider(() => options.getApiKey('openai')),
         new OpenAICompatibleProvider(
           () => options.getApiKey('openai-compatible'),
           options.getBaseUrl
@@ -78,6 +80,7 @@ export class ProviderRegistry {
         requiresApiKey: provider.requiresApiKey,
         configured: provider.isConfigured(),
         models: provider.models,
+        defaultModel: provider.defaultModel,
         dataNotice: provider.dataNotice
       }
       return descriptor

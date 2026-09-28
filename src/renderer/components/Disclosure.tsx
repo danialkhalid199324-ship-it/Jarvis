@@ -40,10 +40,10 @@ export function Disclosure({ disclosure }: { disclosure: ExternalCallDisclosure 
         </>
       ) : (
         <>
-          <strong>Sent to {providerLabel}.</strong> {excerptCount}{' '}
+          <strong>Sent to {providerLabel} ({model}).</strong> {excerptCount}{' '}
           {excerptCount === 1 ? 'excerpt' : 'excerpts'} (about {approxWords.toLocaleString()} words)
           from {labels.length} {noun}
-          {where} {labels.length === 1 ? 'was' : 'were'} sent to {model} to produce this answer.
+          {where} {labels.length === 1 ? 'was' : 'were'} used to produce this answer.
           {labels.length > 0 ? ` (${labels.join(', ')}.)` : ''} Nothing else was included.
         </>
       )}
