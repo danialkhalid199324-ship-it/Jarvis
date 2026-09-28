@@ -2,9 +2,18 @@ import { afterEach, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { AnthropicProvider } from '../src/core/ai/anthropic-provider'
 import { OpenAIProvider } from '../src/core/ai/openai-provider'
 import { ProviderRegistry } from '../src/core/ai/registry'
 import { MODEL_CATALOG } from '../src/core/ai/model-catalog'
+import { DocumentStore } from '../src/core/storage/document-store'
+import { SearchIndex } from '../src/core/index/search-index'
+import { Indexer } from '../src/core/index/indexer'
+import { Logger } from '../src/core/logging/logger'
+import { Assistant } from '../src/core/assistant/assistant'
+import { Session } from '../src/core/assistant/session'
+import type { AuthorisedFolder } from '../src/shared/types'
+import { cleanup, makeTempDir } from './helpers'
 
 const originalFetch = globalThis.fetch
 afterEach(() => {
@@ -165,6 +174,64 @@ describe('official OpenAI provider', () => {
         ),
       (error: Error) => error.name === 'AbortError'
     )
+  })
+})
+
+describe('Anthropic provider error privacy', () => {
+  test('provider response details cannot reach the user, logs or disclosure', async (t) => {
+    const sensitiveDetail = 'provider-secret-detail sk-ant-never-expose'
+    globalThis.fetch = async () =>
+      response(
+        {
+          type: 'error',
+          error: { type: 'api_error', message: sensitiveDetail }
+        },
+        500
+      )
+
+    const dataDir = await makeTempDir('anthropic-error-privacy-data')
+    const archive = await makeTempDir('anthropic-error-privacy-archive')
+    t.after(() => cleanup(dataDir))
+    t.after(() => cleanup(archive))
+    await fs.writeFile(
+      path.join(archive, 'plan.txt'),
+      'Operational plan. The annual compliance audit has not been scheduled.'
+    )
+
+    const store = await DocumentStore.open(dataDir)
+    const logger = new Logger(path.join(dataDir, 'logs'))
+    const indexer = new Indexer(store, new SearchIndex(), logger)
+    const folder: AuthorisedFolder = {
+      id: 'f1',
+      path: archive,
+      label: 'Test',
+      addedAt: new Date().toISOString()
+    }
+    await indexer.run({ folders: [folder], maxFileSizeBytes: 40 * 1024 * 1024 })
+
+    const provider = new AnthropicProvider(() => 'configured-test-key')
+    const assistant = new Assistant({
+      store,
+      index: indexer.searchIndex,
+      providers: new ProviderRegistry([provider], 'anthropic', provider.defaultModel),
+      logger,
+      session: new Session(),
+      maxContextChars: () => 60_000
+    })
+
+    await assistant.ask('Find the operational plan.')
+    const reply = await assistant.ask('Summarise it.')
+    await logger.flush()
+
+    assert.equal(reply.kind, 'notice')
+    assert.match(reply.text, /Anthropic returned an error \(500\)\. Try again later\./)
+    assert.ok(!reply.text.includes(sensitiveDetail))
+    assert.equal(reply.disclosure, undefined)
+
+    const logged = JSON.stringify(await logger.recent())
+    assert.ok(!logged.includes(sensitiveDetail))
+    assert.ok(!logged.includes('sk-ant-never-expose'))
+    assert.ok(logged.includes('Anthropic returned an error (500). Try again later.'))
   })
 })
 

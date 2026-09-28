@@ -86,7 +86,7 @@ export class AnthropicProvider implements AIProvider {
         throw new Error('Jarvis could not reach Anthropic. Check your internet connection.')
       }
       if (error instanceof Anthropic.APIError) {
-        throw new Error(`Anthropic returned an error (${error.status ?? 'unknown'}): ${error.message}`)
+        throw new Error(`Anthropic returned an error (${error.status ?? 'unknown'}). Try again later.`)
       }
       throw error
     }
